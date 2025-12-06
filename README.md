@@ -26,6 +26,7 @@ cd AIflow
 npm install
 npm run dev
 
+
 http://localhost:3000
 
 export API_KEY=YOUR_GEMINI_API_KEY
