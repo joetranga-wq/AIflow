@@ -37,12 +37,14 @@ Run a `.aiflow` workflow via CLI:
 
 ```bash
 export API_KEY=YOUR_GEMINI_API_KEY
-npm run run-flow -- ./example.aiflow
+npm run run-flow -- ./examples/CustomerSupportFlow_v1.0.0.aiflow
 ```
 
 ---
 
 ## 🖼️ Screenshots
+
+> Make sure these files exist under `docs/screenshots/` in your repo.
 
 ### Workflow Builder
 <img src="docs/screenshots/mockup_agents_safari.svg" width="800"/>
@@ -67,6 +69,12 @@ It separates:
 - **Workflow design** (AIFLOW Studio)  
 - **Workflow execution** (AIFLOW Runtime)  
 - **Workflow definition** (`.aiflow` specification)
+
+AIFLOW aims to be:
+
+- **Vendor-neutral** – works across providers (OpenAI, Gemini, Anthropic, etc.).  
+- **Portable** – workflows live in a single `.aiflow` JSON file.  
+- **Deterministic** – routing is driven by explicit logic rules.  
 
 ---
 
@@ -104,11 +112,11 @@ npm run dev
 
 ### 4. Set global API key  
 
-Go to **Settings → Global API Key**
+Go to **Settings → Global API Key** in the Studio UI.
 
-### 5. Run workflow  
+### 5. Run a workflow  
 
-Press **Run** in the UI.
+Press **Run** in the UI to execute the current `.aiflow` project in the browser.
 
 ---
 
@@ -124,7 +132,7 @@ Execute any `.aiflow` project:
 
 ```bash
 export API_KEY=YOUR_GEMINI_API_KEY
-npm run run-flow -- ./myflow.aiflow
+npm run run-flow -- ./examples/CustomerSupportFlow_v1.0.0.aiflow
 ```
 
 ---
@@ -133,9 +141,9 @@ npm run run-flow -- ./myflow.aiflow
 
 The runtime:
 
-- strips code fences  
+- strips ```json code fences  
 - parses JSON output  
-- injects parsed fields into workflow context  
+- injects parsed fields into the workflow context  
 
 Example:
 
@@ -159,7 +167,7 @@ Used for routing:
 
 ```text
 AIflow/
-├── studio/                 # React frontend
+├── studio/                 # React frontend (AIFLOW Studio)
 │   ├── App.tsx
 │   ├── components/
 │   └── services/
@@ -179,6 +187,11 @@ AIflow/
 │
 ├── spec/
 │   └── aiflow-v0.1.md
+│
+├── examples/
+│   ├── CustomerSupportFlow_v1.0.0.aiflow
+│   ├── MarketingContentFlow_v0.5.0.aiflow
+│   └── LeadQualificationFlow_v1.0.0.aiflow
 │
 ├── index.tsx
 ├── index.html
@@ -218,10 +231,12 @@ AIflow/
 ```bash
 git checkout -b feat/my-feature
 npm run dev
-npm run run-flow -- ./example.aiflow
+npm run run-flow -- ./examples/CustomerSupportFlow_v1.0.0.aiflow
 git commit -am "Add feature"
 git push
 ```
+
+Please open a Pull Request with a clear description and, if possible, an example `.aiflow` file that demonstrates your change.
 
 ---
 
