@@ -1,7 +1,7 @@
 
 import React, { useEffect, useRef } from 'react';
 import { X, Terminal, ChevronDown, CheckCircle, AlertTriangle, Info } from 'lucide-react';
-import { LogEntry } from '../services/WorkflowRunner';
+import { LogEntry } from '../../runtime/browser/WorkflowRunner';
 
 interface ConsolePanelProps {
   logs: LogEntry[];
