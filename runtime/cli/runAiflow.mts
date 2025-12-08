@@ -5,7 +5,7 @@ import { GoogleGenAI } from "@google/genai";
 import type { AIFlowProject, Agent } from "../../core/types";
 
 // Kleine helper om ```json ... ``` naar echte JSON te parsen
-function tryParseJson(text: string): any {
+export function tryParseJson(text: string): any {
   if (!text) return text;
 
   // Strip code fences ```json ... ```
@@ -22,6 +22,7 @@ function tryParseJson(text: string): any {
     return text; // geen geldige JSON → gewoon de originele tekst bewaren
   }
 }
+
 
 // Haal API-key uit env (CLI-omgeving)
 const API_KEY = process.env.API_KEY || process.env.GEMINI_API_KEY;
@@ -130,7 +131,13 @@ Respond in ${agent.output_format || "text"}.
   console.log(JSON.stringify(context, null, 2));
 }
 
-run().catch((err) => {
-  console.error("Unexpected error while running flow:", err);
-  process.exit(1);
-});
+// ... alle imports + functies + run() definitie ...
+
+// Alleen de CLI daadwerkelijk starten als we NIET onder Vitest draaien
+if (!process.env.VITEST) {
+  run().catch((err) => {
+    console.error("Unexpected error while running flow:", err);
+    process.exit(1);
+  });
+}
+
