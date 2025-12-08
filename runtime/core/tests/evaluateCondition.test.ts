@@ -63,6 +63,7 @@ describe("evaluateCondition", () => {
       context: {
         output_agent1: {
           ticket_type: "billing",
+          score: 0.9,
         },
       },
       output: {},
@@ -78,15 +79,32 @@ describe("evaluateCondition", () => {
     ).toBe(false);
   });
 
+  it("supports numeric comparisons", () => {
+    const numericCtx = {
+      context: {
+        score: 0.9,
+        retries: 2,
+        nested: { value: 5 },
+      },
+      output: {},
+      agentId: "agent1",
+    };
+
+    expect(evaluateCondition("score > 0.5", numericCtx)).toBe(true);
+    expect(evaluateCondition("score < 0.5", numericCtx)).toBe(false);
+
+    expect(evaluateCondition("retries >= 2", numericCtx)).toBe(true);
+    expect(evaluateCondition("retries >= 3", numericCtx)).toBe(false);
+
+    expect(evaluateCondition("nested.value <= 5", numericCtx)).toBe(true);
+    expect(evaluateCondition("nested.value < 5", numericCtx)).toBe(false);
+  });
+
   it("returns false for unknown or invalid expressions", () => {
-    // Tot v0.2 zijn numeric compares nog niet geïmplementeerd: moeten false teruggeven
-    expect(
-      evaluateCondition("foo > 3", ctx)
-    ).toBe(false);
+    // foo > 3: 'foo' bestaat niet → numeric compare faalt → false
+    expect(evaluateCondition("foo > 3", ctx)).toBe(false);
 
     // Volledig onbekende syntax
-    expect(
-      evaluateCondition("weird stuff()", ctx)
-    ).toBe(false);
+    expect(evaluateCondition("weird stuff()", ctx)).toBe(false);
   });
 });
