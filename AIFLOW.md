@@ -43,7 +43,7 @@ Samengevat:
   - `cli/` — Node/TS CLI-runtime (`runAiflow.mts`)
   - `browser/` — browser runtime (`WorkflowRunner.ts`)
 - `spec/` — AIFLOW Standard v0.1 (`aiflow-v0.1.md`)
-- `examples/` — voorbeeldprojecten (`subfolders per example`)
+- `examples/` — voorbeeldprojecten (per example een subfolder met `.aiflow` + `README.md`)
 - `docs/` — o.a. screenshots voor README & site
 
 De README beschrijft al netjes Quick Start, CLI-run, projectstructuur en roadmap.
