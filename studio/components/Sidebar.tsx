@@ -24,7 +24,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange, project })
     <div className="w-64 bg-white border-r border-slate-200 h-screen flex flex-col fixed left-0 top-0 z-10 shadow-sm">
       <div className="p-6 flex items-center space-x-2 border-b border-slate-100">
         <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-bold">
-          A
+          AI
         </div>
         <span className="text-xl font-bold text-slate-800 tracking-tight">AIFLOW</span>
       </div>

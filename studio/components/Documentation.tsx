@@ -29,7 +29,7 @@ const Documentation: React.FC = () => {
                 <BookOpen size={18} className="mr-2 text-indigo-600"/> 
                 AIFLOW Standard
             </h3>
-            <p className="text-xs text-slate-500">Official Specification v1.0</p>
+            <p className="text-xs text-slate-500">Official Specification v0.1</p>
         </div>
         
         <nav className="space-y-1">
@@ -56,7 +56,7 @@ const Documentation: React.FC = () => {
         {/* Header */}
         <div className="mb-12 border-b border-slate-200 pb-8">
             <div className="flex items-center space-x-3 mb-4">
-                <div className="w-10 h-10 bg-indigo-600 text-white rounded-lg flex items-center justify-center font-bold text-xl">A</div>
+                <div className="w-10 h-10 bg-indigo-600 text-white rounded-lg flex items-center justify-center font-bold text-xl">AI</div>
                 <h1 className="text-4xl font-extrabold text-slate-900 tracking-tight">AIFLOW Open Standard</h1>
             </div>
             <p className="text-xl text-slate-500 font-light">
@@ -269,6 +269,9 @@ const Documentation: React.FC = () => {
                         <div>
                             <div className="text-xs font-bold text-slate-500 uppercase mb-2">Python Runtime</div>
                             <pre className="bg-slate-900 text-slate-300 p-4 rounded-lg text-xs font-mono overflow-x-auto">
+
+Note: This is a future API example. The Python and Node runtimes are planned for v0.3+.
+
 {`from aiflow_core import FlowEngine
 
 # Load the project container
@@ -284,6 +287,8 @@ result = engine.run(
                         <div>
                             <div className="text-xs font-bold text-slate-500 uppercase mb-2">Node.js Runtime</div>
                             <pre className="bg-slate-900 text-slate-300 p-4 rounded-lg text-xs font-mono overflow-x-auto">
+
+Note: This is a future API example. The Python and Node runtimes are planned for v0.3+.             
 {`import { AIFlowRuntime } from '@aiflow/node';
 
 const runtime = new AIFlowRuntime();

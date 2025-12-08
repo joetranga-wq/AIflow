@@ -233,4 +233,9 @@ Planned additions:
 
 ---
 
+### Roadmap Notes
+Some sections in this document describe planned features for v0.2–v0.4. These are placeholders to give the community visibility into the intended direction. Only features explicitly marked as part of v0.1 are implemented.
+
+---
+
 _End of AIFLOW Standard v0.1_
