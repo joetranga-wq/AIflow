@@ -25,6 +25,9 @@ interface ProjectSession {
     lastModified: Date;
 }
 
+// ✅ Templates voor "New from template"
+type TemplateKey = 'customer_support' | 'lead_qualification' | 'marketing_content';
+
 const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<ViewState>(ViewState.DASHBOARD);
   
@@ -44,7 +47,7 @@ const App: React.FC = () => {
   const [runInputs, setRunInputs] = useState<Record<string, string>>({});
   const runnerRef = useRef<WorkflowRunner | null>(null);
 
-  // Dirty State (Unsaved Changes) - New Feature
+  // Dirty State (Unsaved Changes)
   const [isDirty, setIsDirty] = useState(false);
 
   // UI State
@@ -61,6 +64,9 @@ const App: React.FC = () => {
   const [newToolTemplate, setNewToolTemplate] = useState<string>("");
   const [showSaveAsModal, setShowSaveAsModal] = useState(false);
   const [saveAsName, setSaveAsName] = useState("");
+
+  // ✅ Template modal state
+  const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const toolTemplates = TOOL_TEMPLATES;
@@ -91,7 +97,6 @@ const App: React.FC = () => {
   }, [activePromptFile, project.prompts]);
 
   // --- Navigation Guard ---
-  // Prevent closing browser tab with unsaved changes
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       if (isDirty) {
@@ -103,14 +108,11 @@ const App: React.FC = () => {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [isDirty]);
 
-  // Handle internal navigation with confirmation
   const navigate = (view: ViewState) => {
       if (isDirty && view !== currentView) {
           if (window.confirm("You have unsaved changes. Are you sure you want to leave?")) {
               setCurrentView(view);
               setSelectedAgentId(null);
-              // Note: We don't clear isDirty here because the changes are still in memory
-              // We just allow the navigation.
           }
       } else {
           setCurrentView(view);
@@ -127,7 +129,6 @@ const App: React.FC = () => {
       setCurrentView(ViewState.TOOLS);
   };
 
-  // Jump from Debug Trace to Workflow Builder on a specific agent
   const handleJumpToAgentFromTrace = (agentId: string) => {
     setSelectedAgentId(agentId);
     setCurrentView(ViewState.WORKFLOW);
@@ -141,12 +142,10 @@ const App: React.FC = () => {
             let newIndex = s.historyIndex;
             
             if (!transient) {
-                // Add to history stack
                 newHistory = newHistory.slice(0, newIndex + 1);
                 newHistory.push(newProject);
                 newIndex++;
             } else {
-                // Replace current head (for transient updates like status)
                 newHistory[newIndex] = newProject;
             }
             return { ...s, history: newHistory, historyIndex: newIndex, lastModified: new Date() };
@@ -161,7 +160,7 @@ const App: React.FC = () => {
   // --- File I/O ---
   const handleSave = () => {
     downloadProject(project.metadata.name);
-    setIsDirty(false); // Clear dirty state after successful save/export
+    setIsDirty(false);
   };
 
   const handleSaveAs = () => {
@@ -173,7 +172,6 @@ const App: React.FC = () => {
   };
 
   const downloadProject = (filename: string) => {
-    // Filename logic: [name]_v[version].aiflow
     const version = project.metadata.version || '1.0.0';
     const safeName = filename.replace(/[^a-z0-9]/gi, '_').toLowerCase();
     const finalFilename = `${safeName}_v${version}.aiflow`;
@@ -235,7 +233,7 @@ const App: React.FC = () => {
       event.target.value = ''; 
   };
 
-  // --- Actions ---
+  // --- Run Actions ---
   const handleRunClick = () => {
       setRunModalOpen(true);
   };
@@ -245,7 +243,6 @@ const App: React.FC = () => {
       setIsConsoleOpen(true);
       setLogs([]);
       
-      // Reset statuses
       const resetAgents = project.agents.map(a => ({...a, executionStatus: 'idle' as const}));
       updateProject({ ...project, agents: resetAgents }, true);
 
@@ -316,6 +313,62 @@ const App: React.FC = () => {
       setActiveSessionId(name);
       setIsDirty(false);
       setCurrentView(ViewState.WORKFLOW);
+  };
+
+  // ✅ Open template modal (Dashboard → New from template)
+  const handleOpenTemplateModal = () => {
+    if (isDirty) {
+      if (!confirm("You have unsaved changes in the current project. Create from template anyway?")) {
+        return;
+      }
+    }
+    setIsTemplateModalOpen(true);
+  };
+
+  // ✅ Maak nieuwe sessie op basis van template
+  const handleCreateProjectFromTemplate = (templateKey: TemplateKey) => {
+    let base: AIFlowProject;
+    let name: string;
+
+    switch (templateKey) {
+      case 'customer_support':
+        base = INITIAL_PROJECT;
+        name = 'Customer Support Flow';
+        break;
+      case 'lead_qualification':
+        base = INITIAL_PROJECT;
+        name = 'Lead Qualification Flow';
+        break;
+      case 'marketing_content':
+        base = MARKETING_PROJECT;
+        name = 'Marketing Content Flow';
+        break;
+      default:
+        base = INITIAL_PROJECT;
+        name = 'New Template Flow';
+    }
+
+    const cloned: AIFlowProject = JSON.parse(JSON.stringify(base));
+    cloned.metadata = {
+      ...cloned.metadata,
+      name,
+      version: cloned.metadata.version || '1.0.0',
+    };
+
+    const sessionId = `${name.replace(/\s+/g, '_')}_${Date.now()}`;
+    const newSession: ProjectSession = {
+      id: sessionId,
+      history: [cloned],
+      historyIndex: 0,
+      lastModified: new Date(),
+    };
+
+    setSessions(prev => [...prev, newSession]);
+    setActiveSessionId(sessionId);
+    setIsDirty(false);
+    setCurrentView(ViewState.WORKFLOW);
+    setSelectedAgentId(null);
+    setIsTemplateModalOpen(false);
   };
 
   const handleUndo = () => {
@@ -466,7 +519,6 @@ const App: React.FC = () => {
       setNewToolName("");
       setNewToolTemplate("");
       
-      // Feature: Auto-navigate to tools view if not there
       if (currentView !== ViewState.TOOLS) {
           setCurrentView(ViewState.TOOLS);
       }
@@ -910,7 +962,7 @@ const App: React.FC = () => {
           return <Documentation />;
       }
 
-      // Default to Dashboard
+      // Default → Dashboard
       return (
             <Dashboard 
                 project={project} 
@@ -920,6 +972,7 @@ const App: React.FC = () => {
                 })}
                 onSwitchProject={handleSwitchProject}
                 onCreateProject={handleCreateProject}
+                onCreateFromTemplate={handleOpenTemplateModal}
                 onExport={handleSave}
             />
         );
@@ -956,6 +1009,89 @@ const App: React.FC = () => {
                   </div>
               </div>
           </div>
+      )}
+
+      {/* ✅ Template Modal */}
+      {isTemplateModalOpen && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl w-[600px] max-w-full p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-slate-900 flex items-center">
+                <FileText size={18} className="mr-2 text-indigo-500" />
+                Create Project from Template
+              </h3>
+              <button onClick={() => setIsTemplateModalOpen(false)}>
+                <X size={18} className="text-slate-400 hover:text-slate-700" />
+              </button>
+            </div>
+            <p className="text-sm text-slate-500 mb-4">
+              Choose a starter workflow. You can customize everything afterwards in the Workflow Builder.
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+              <button
+                onClick={() => handleCreateProjectFromTemplate('customer_support')}
+                className="border border-slate-200 rounded-xl p-4 text-left hover:border-indigo-300 hover:shadow-md transition-all bg-slate-50"
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <div className="p-2 rounded-lg bg-indigo-100 text-indigo-600">
+                    <Box size={18} />
+                  </div>
+                  <span className="text-xs font-semibold text-indigo-600">
+                    Recommended
+                  </span>
+                </div>
+                <h4 className="font-semibold text-slate-900 text-sm mb-1">
+                  Customer Support Flow
+                </h4>
+                <p className="text-xs text-slate-500">
+                  Multi-agent support triage + response flow for tickets.
+                </p>
+              </button>
+
+              <button
+                onClick={() => handleCreateProjectFromTemplate('lead_qualification')}
+                className="border border-slate-200 rounded-xl p-4 text-left hover:border-indigo-300 hover:shadow-md transition-all"
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <div className="p-2 rounded-lg bg-emerald-100 text-emerald-600">
+                    <Database size={18} />
+                  </div>
+                </div>
+                <h4 className="font-semibold text-slate-900 text-sm mb-1">
+                  Lead Qualification Flow
+                </h4>
+                <p className="text-xs text-slate-500">
+                  Score and prioritize leads with multi-step logic.
+                </p>
+              </button>
+
+              <button
+                onClick={() => handleCreateProjectFromTemplate('marketing_content')}
+                className="border border-slate-200 rounded-xl p-4 text-left hover:border-indigo-300 hover:shadow-md transition-all"
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <div className="p-2 rounded-lg bg-amber-100 text-amber-600">
+                    <Zap size={18} />
+                  </div>
+                </div>
+                <h4 className="font-semibold text-slate-900 text-sm mb-1">
+                  Marketing Content Flow
+                </h4>
+                <p className="text-xs text-slate-500">
+                  Generate campaign ideas and drafts with structured agents.
+                </p>
+              </button>
+            </div>
+            <div className="flex justify-end space-x-2">
+              <button
+                onClick={() => setIsTemplateModalOpen(false)}
+                className="px-4 py-2 text-slate-600 hover:bg-slate-50 rounded-lg text-sm font-medium"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
       )}
       
       {/* Run Configuration Modal */}
