@@ -68,6 +68,9 @@ async function run() {
     ...(project.flow?.variables || {}),
   };
 
+  // Trace-structuur om alle stappen vast te leggen
+  const trace: any[] = [];
+
   // ✅ Bepaal start-agent: eerst flow.start, dan flow.entry_agent als fallback
   let currentAgentId: string | null =
     (project.flow && project.flow.start) ||
@@ -136,19 +139,49 @@ Respond in ${agent.output_format || "text"}.
       (rule) => rule.from === currentAgentId
     );
 
+    const ruleResults: {
+      id: string | null;
+      from: string | null;
+      to: string | null;
+      condition: string | null;
+      result: boolean;
+    }[] = [];
+
     let nextRule: any | null = null;
 
     for (const rule of rulesForAgent) {
-      const ok = evaluateCondition(rule.condition, {
+      const result = evaluateCondition(rule.condition, {
         context,
         output: parsed,
         agentId: currentAgentId,
       });
-      if (ok) {
+
+      ruleResults.push({
+        id: rule.id ?? null,
+        from: rule.from ?? null,
+        to: rule.to ?? null,
+        condition: rule.condition ?? null,
+        result,
+      });
+
+      if (!nextRule && result) {
         nextRule = rule;
-        break;
       }
     }
+
+    // ✅ Trace entry maken voor deze stap
+    trace.push({
+      step: steps,
+      agentId: currentAgentId,
+      agentName: agent.name ?? currentAgentId,
+      role: agent.role,
+      inputContext: { ...context },
+      rawOutput,
+      parsedOutput: parsed,
+      rulesEvaluated: ruleResults,
+      selectedRuleId: nextRule?.id ?? null,
+      nextAgentId: nextRule?.to ?? null,
+    });
 
     if (!nextRule) {
       console.log("\n✅ No further transitions, stopping.");
@@ -164,6 +197,9 @@ Respond in ${agent.output_format || "text"}.
     currentAgentId = nextRule.to;
     steps++;
   }
+
+  // ✅ Trace aan de context toevoegen voor debugging / Studio
+  context.__trace = trace;
 
   console.log("\n🏁 Flow finished. Final context:");
   console.log(JSON.stringify(context, null, 2));
