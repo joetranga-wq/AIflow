@@ -1,4 +1,3 @@
-
 import React, { useEffect, useRef, useState } from 'react';
 import * as d3Base from 'd3';
 import { AIFlowProject } from '../../core/types';
@@ -383,14 +382,14 @@ const WorkflowGraph: React.FC<WorkflowGraphProps> = ({
       .style("overflow", "visible").style("pointer-events", "none");
 
     const actionContainer = foreignObject.append("xhtml:div")
-      .style("display", "flex").style("gap", "4px").style("opacity", "0") .style("transition", "opacity 0.2s")
+      .style("display", "flex").style("gap", "4px").style("opacity", "0").style("transition", "opacity 0.2s")
       .attr("class", "hover-actions pointer-events-auto");
 
     // Helper to create hover button
     const createHoverBtn = (svgContent: string, title: string, onClick: (d: any) => void) => {
         actionContainer.append("xhtml:button")
             .attr("title", title)
-            .style("width", "24px").style("height", "24px").style("border-radius", "12px").style("background", "white").style("border", "1px solid #E2E8F0").style("color", "#475569").style("display", "flex").style("align-items", "center").style("justify-content", "center").style("cursor", "pointer").style("box-shadow", "0 2px 4px rgba(0,0,0,0.05)")
+            .style("width", "24px").style("height", "24px").style("border-radius", "12px").style("background", "white").style("border", "1px solid #E2E8F0").style("color", " #475569").style("display", "flex").style("align-items", "center").style("justify-content", "center").style("cursor", "pointer").style("box-shadow", "0 2px 4px rgba(0,0,0,0.05)")
             .html(svgContent)
             .on("click", (e: any, d: any) => { e.stopPropagation(); onClick(d); });
     };
@@ -409,15 +408,15 @@ const WorkflowGraph: React.FC<WorkflowGraphProps> = ({
 
     // --- Simulation Tick ---
     simulation.on("tick", () => {
-      linkGroup.attr("d", (d: any) => `M${d.source.x},${d.source.y} L${d.target.x},${d.target.y}`);
+      linkGroup.attr("d", (d: any) => `M${(d.source as any).x},${(d.source as any).y} L${(d.target as any).x},${(d.target as any).y}`);
       
       linkLabelRect
-          .attr("x", (d: any) => (d.source.x + d.target.x) / 2 - 50)
-          .attr("y", (d: any) => (d.source.y + d.target.y) / 2 - 10);
+          .attr("x", (d: any) => ((d.source as any).x + (d.target as any).x) / 2 - 50)
+          .attr("y", (d: any) => ((d.source as any).y + (d.target as any).y) / 2 - 10);
           
       linkText
-        .attr("x", (d: any) => (d.source.x + d.target.x) / 2)
-        .attr("y", (d: any) => (d.source.y + d.target.y) / 2);
+        .attr("x", (d: any) => ((d.source as any).x + (d.target as any).x) / 2)
+        .attr("y", (d: any) => ((d.source as any).y + (d.target as any).y) / 2);
 
       nodeGroup.attr("transform", (d: any) => `translate(${d.x},${d.y})`);
     });
@@ -426,13 +425,14 @@ const WorkflowGraph: React.FC<WorkflowGraphProps> = ({
         simulation.stop();
         simulationRef.current = null;
     };
-  }, [project.agents.length, project.flow.logic.length]);
+  }, [project.agents.length, project.flow.logic.length, project.flow.entry_agent]);
 
   // --- React Effect for Selections/Mode ---
   useEffect(() => {
       const svg = d3.select(svgRef.current);
       if (svg.empty()) return;
 
+      // Node rectangles / selection / linking (bestaand gedrag)
       svg.selectAll(".node-rect")
           .attr("stroke", (d: any) => {
               if (selectedNodeId === d.id) return d.isTool ? "#D97706" : "#6366F1";
@@ -444,11 +444,77 @@ const WorkflowGraph: React.FC<WorkflowGraphProps> = ({
           .style("filter", (d: any) => (selectedNodeId === d.id ? (d.isTool ? "url(#glow-amber)" : "url(#glow-indigo)") : "url(#drop-shadow)"));
 
       svg.selectAll(".node-group").style("cursor", isLinkingMode ? "crosshair" : "grab");
+
+      // ✨ Extra juicy: highlight links rondom geselecteerde node / linking source
+      svg.selectAll(".link-path")
+        .attr("stroke", (d: any) => {
+          const sourceId = (d.source as any)?.id ?? d.source;
+          const targetId = (d.target as any)?.id ?? d.target;
+
+          const isConnectedToSelected =
+            !!selectedNodeId && (sourceId === selectedNodeId || targetId === selectedNodeId);
+
+          const isFromLinkingSource =
+            !!isLinkingMode && !!linkingSourceId && sourceId === linkingSourceId;
+
+          if (isLinkingMode && linkingSourceId) {
+            return isFromLinkingSource ? "#6366F1" : "#E2E8F0";
+          }
+
+          if (isConnectedToSelected) {
+            return "#6366F1";
+          }
+
+          return "#CBD5E1";
+        })
+        .attr("stroke-width", (d: any) => {
+          const sourceId = (d.source as any)?.id ?? d.source;
+          const targetId = (d.target as any)?.id ?? d.target;
+
+          const isConnectedToSelected =
+            !!selectedNodeId && (sourceId === selectedNodeId || targetId === selectedNodeId);
+
+          const isFromLinkingSource =
+            !!isLinkingMode && !!linkingSourceId && sourceId === linkingSourceId;
+
+          if (isLinkingMode && linkingSourceId) {
+            return isFromLinkingSource ? 3 : 1.5;
+          }
+
+          return isConnectedToSelected ? 3 : 2;
+        })
+        .attr("opacity", (d: any) => {
+          const sourceId = (d.source as any)?.id ?? d.source;
+          const targetId = (d.target as any)?.id ?? d.target;
+
+          const isConnectedToSelected =
+            !!selectedNodeId && (sourceId === selectedNodeId || targetId === selectedNodeId);
+
+          const isFromLinkingSource =
+            !!isLinkingMode && !!linkingSourceId && sourceId === linkingSourceId;
+
+          // Geen selectie / linking mode → alles normaal
+          if (!selectedNodeId && !isLinkingMode) {
+            return 1;
+          }
+
+          if (isLinkingMode && linkingSourceId) {
+            return isFromLinkingSource ? 1 : 0.35;
+          }
+
+          return isConnectedToSelected ? 1 : 0.35;
+        });
   }, [selectedNodeId, isLinkingMode, linkingSourceId]);
 
   return (
-    <div className="bg-slate-50 border border-slate-200 rounded-2xl overflow-hidden shadow-inner h-full w-full relative" onContextMenu={(e) => e.preventDefault()}>
-      <svg ref={svgRef} className="w-full h-full block cursor-grab active:cursor-grabbing"></svg>
+    <div
+      className="bg-slate-50 border border-slate-200 rounded-2xl overflow-hidden shadow-inner h-full w-full relative"
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      <svg
+        ref={svgRef}
+        className="w-full h-full block cursor-grab active:cursor-grabbing"
+      ></svg>
       
       {/* Legend */}
       <div className="absolute bottom-4 right-4 bg-white/90 backdrop-blur text-xs text-slate-500 p-3 rounded-lg shadow-sm border border-slate-200 pointer-events-none select-none">
