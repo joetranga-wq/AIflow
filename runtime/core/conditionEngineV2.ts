@@ -29,8 +29,10 @@ interface Token {
 class Lexer {
   private pos = 0;
   private currentChar: string | undefined;
+  private input: string;
 
-  constructor(private input: string) {
+  constructor(input: string) {
+    this.input = input;
     this.currentChar = input[this.pos];
   }
 
@@ -161,8 +163,10 @@ function isIdentContinue(ch: string | undefined): boolean {
 
 class Parser {
   private current: Token;
+  private lexer: Lexer;
 
-  constructor(private lexer: Lexer) {
+  constructor(lexer: Lexer) {
+    this.lexer = lexer;
     this.current = this.lexer.next();
   }
 
