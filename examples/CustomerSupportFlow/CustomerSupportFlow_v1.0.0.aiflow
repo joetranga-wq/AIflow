@@ -1,70 +1,133 @@
 {
   "metadata": {
     "name": "CustomerSupportFlow",
-    "version": "1.0.0"
+    "version": "1.0.0",
+    "description": "Multi-agent workflow for automated level 1 customer support.",
+    "creator": "Marcel Spaan"
   },
-
-  "agents": [
-    {
-      "id": "triage",
-      "name": "Triage Bot",
-      "role": "support_triage",
-      "model": {
-        "provider": "gemini",
-        "name": "gemini-pro"
-      },
-      "prompt": "triage_prompt",
-      "output_format": "json",
-      "tools": []
-    },
-    {
-      "id": "human_escalation",
-      "name": "Human Support Agent",
-      "role": "support_handoff",
-      "model": {
-        "provider": "gemini",
-        "name": "gemini-pro"
-      },
-      "prompt": "escalation_prompt",
-      "output_format": "json",
-      "tools": []
-    },
-    {
-      "id": "automated_resolution",
-      "name": "Resolution Bot",
-      "role": "support_resolution",
-      "model": {
-        "provider": "gemini",
-        "name": "gemini-pro"
-      },
-      "prompt": "resolution_prompt",
-      "output_format": "json",
-      "tools": []
-    }
-  ],
-
-  "prompts": {
-    "triage_prompt": "You are a support triage bot. Analyze the user's issue and return JSON: { \"needs_human\": boolean, \"category\": string }. Only return JSON.",
-    "escalation_prompt": "You are a human escalation assistant. Prepare a handoff summary in JSON: { \"summary\": string }.",
-    "resolution_prompt": "You are an automated resolver. Provide a JSON resolution response: { \"resolved\": boolean, \"message\": string }."
-  },
-
   "flow": {
-    "entry_agent": "triage",
-
+    "schema_version": "1.0",
+    "entry_agent": "agent1",
+    "agents": [
+      "agent1",
+      "agent2",
+      "agent3"
+    ],
+    "variables": {
+      "language": "nl",
+      "timezone": "Europe/Amsterdam"
+    },
     "logic": [
       {
-        "id": "rule_escalate",
-        "from": "triage",
-        "to": "human_escalation",
-        "condition": "output.needs_human == true"
+        "id": "rule1",
+        "from": "agent1",
+        "to": "agent2",
+        "condition": "ticket_type == 'technical'",
+        "description": "Route technical issues to the solution finder."
       },
       {
-        "id": "rule_auto",
-        "from": "triage",
-        "to": "automated_resolution",
-        "condition": "output.needs_human == false"
+        "id": "rule2",
+        "from": "agent1",
+        "to": "agent3",
+        "condition": "ticket_type == 'billing'",
+        "description": "Route billing issues to the general responder."
+      },
+      {
+        "id": "rule3",
+        "from": "agent2",
+        "to": "agent3",
+        "condition": "solution_found == true",
+        "description": "Draft response after solution is found."
       }
-    ]
+    ],
+    "error_handling": {
+      "retry": 2,
+      "fallback_agent": "agent3"
+    }
+  },
+  "agents": [
+    {
+      "id": "agent1",
+      "name": "TriageBot",
+      "role": "Classifier",
+      "model": {
+        "provider": "openai",
+        "name": "gpt-4.2-mini",
+        "temperature": 0.1,
+        "max_tokens": 500
+      },
+      "prompt": "system_triage.txt",
+      "instructions": "instructions_triage.md",
+      "tools": [],
+      "memory": "memory/schema.json",
+      "output_format": "json",
+      "executionStatus": "idle"
+    },
+    {
+      "id": "agent2",
+      "name": "TechSolver",
+      "role": "Engineer",
+      "model": {
+        "provider": "openai",
+        "name": "gpt-4-turbo",
+        "temperature": 0.4,
+        "max_tokens": 2000
+      },
+      "prompt": "system_tech.txt",
+      "instructions": "instructions_tech.md",
+      "tools": [
+        "web_search",
+        "stack_overflow_api"
+      ],
+      "memory": "memory/vector.json",
+      "output_format": "json",
+      "executionStatus": "idle"
+    },
+    {
+      "id": "agent3",
+      "name": "Responder",
+      "role": "Copywriter",
+      "model": {
+        "provider": "anthropic",
+        "name": "claude-3-5-sonnet",
+        "temperature": 0.7,
+        "max_tokens": 1000
+      },
+      "prompt": "system_responder.txt",
+      "instructions": "guidelines_tone.md",
+      "tools": [],
+      "memory": "memory/schema.json",
+      "output_format": "text",
+      "executionStatus": "idle"
+    }
+  ],
+  "tools": {
+    "web_search": {
+      "type": "http",
+      "endpoint": "https://api.search.com/v1",
+      "method": "GET",
+      "description": "Search the web for documentation."
+    },
+    "stack_overflow_api": {
+      "type": "http",
+      "endpoint": "https://api.stackoverflow.com/v1/search",
+      "method": "GET",
+      "description": "Search StackOverflow for relevant technical answers."
+    },
+    "calculator": {
+      "type": "builtin",
+      "operations": [
+        "add",
+        "subtract",
+        "multiply",
+        "divide"
+      ],
+      "description": "Basic arithmetic operations."
+    }
+  },
+  "prompts": {
+    "system_triage.txt": "You are a classifier. Analyze the incoming ticket and output JSON with 'ticket_type' (technical|billing|general).",
+    "system_tech.txt": "You are a senior support engineer. Use tools to find solutions to the technical problem described.",
+    "system_responder.txt": "You are a polite customer service agent. Draft a friendly email based on the provided solution."
   }
 }

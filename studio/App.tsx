@@ -7,6 +7,8 @@ import ToolNodeEditor from './components/ToolNodeEditor';
 import ConsolePanel from './components/ConsolePanel';
 import Documentation from './components/Documentation';
 import DebugTraceView from './components/DebugTraceView';
+import ValidationPanel from './components/ValidationPanel';
+import { validateProject, hasValidationErrors, ValidationIssue } from '../runtime/core/validator';
 
 import { WorkflowRunner, LogEntry } from '../runtime/browser/WorkflowRunner';
 import { ViewState, AIFlowProject, Agent, ToolDefinition } from '../core/types';
@@ -70,6 +72,10 @@ const App: React.FC = () => {
 
   // ✅ Template modal state
   const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
+
+  // ✅ Validation Panel state
+  const [validationIssues, setValidationIssues] = useState<ValidationIssue[] | null>(null);
+  const [isValidationPanelOpen, setIsValidationPanelOpen] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const toolTemplates = TOOL_TEMPLATES;
@@ -595,6 +601,17 @@ const App: React.FC = () => {
       });
   };
 
+  // ✅ Validation handler
+  const handleValidateProject = () => {
+    const issues = validateProject(project);
+    setValidationIssues(issues);
+    setIsValidationPanelOpen(true);
+
+    if (!hasValidationErrors(issues) && issues.length === 0) {
+      alert('✅ Project is valid. No structural issues found.');
+    }
+  };
+
   // --- Render Views ---
   const renderContent = () => {
       if (currentView === ViewState.MEMORY) {
@@ -698,6 +715,16 @@ const App: React.FC = () => {
                             )}
                         </div>
 
+                        {/* ✅ Validate button */}
+                        <button 
+                          onClick={handleValidateProject}
+                          className="flex items-center px-3 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 shadow-sm font-medium text-sm"
+                          title="Validate flow structure"
+                        >
+                          <Check size={16} className="mr-2" />
+                          Validate
+                        </button>
+
                         <div className="h-8 w-px bg-slate-300 mx-2"></div>
 
                         <button 
@@ -764,23 +791,25 @@ const App: React.FC = () => {
                 </div>
 
                 <div className="flex flex-1 gap-6 min-h-0 relative">
-                    <div className="flex-1">
-                    <WorkflowGraph 
-                        project={project} 
-                        onSelectAgent={setSelectedAgentId}
-                        onEditCondition={(id, c) => setEditingLink({id, condition: c})}
-                        onNavigateToPrompt={handleNavigateToPrompt}
-                        onNavigateToTools={handleNavigateToTools}
-                        isLinkingMode={isLinkingMode}
-                        linkingSourceId={linkingSourceId}
-                        onNodeClick={handleNodeClick}
-                        selectedNodeId={selectedAgentId}
-                        onLinkCreate={handleLinkCreate}
-                        highlightedNodeIds={highlightedNodeIds}
-                        highlightedEdges={highlightedEdges}
-                    />
-                    </div>
-                     {selectedNode && (
+                    {/* Linker deel: graph + agent editor */}
+                    <div className="flex-1 flex gap-6 min-h-0">
+                      <div className="flex-1">
+                        <WorkflowGraph 
+                            project={project} 
+                            onSelectAgent={setSelectedAgentId}
+                            onEditCondition={(id, c) => setEditingLink({id, condition: c})}
+                            onNavigateToPrompt={handleNavigateToPrompt}
+                            onNavigateToTools={handleNavigateToTools}
+                            isLinkingMode={isLinkingMode}
+                            linkingSourceId={linkingSourceId}
+                            onNodeClick={handleNodeClick}
+                            selectedNodeId={selectedAgentId}
+                            onLinkCreate={handleLinkCreate}
+                            highlightedNodeIds={highlightedNodeIds}
+                            highlightedEdges={highlightedEdges}
+                        />
+                      </div>
+                      {selectedNode && (
                         <div className="w-1/3 min-w-[400px]">
                             {selectedNode.role === 'Tool' ? (
                                 <ToolNodeEditor 
@@ -797,6 +826,17 @@ const App: React.FC = () => {
                                 />
                             )}
                         </div>
+                      )}
+                    </div>
+
+                    {/* Rechter deel: Validation Panel */}
+                    {isValidationPanelOpen && (
+                      <div className="w-[360px] h-full">
+                        <ValidationPanel
+                          issues={validationIssues ?? []}
+                          onClose={() => setIsValidationPanelOpen(false)}
+                        />
+                      </div>
                     )}
                 </div>
 
@@ -971,15 +1011,14 @@ const App: React.FC = () => {
         );
       }
 
-            if (currentView === ViewState.DEBUG) {
-            return (
-                <DebugTraceView
-                onJumpToAgent={handleJumpToAgentFromTrace}
-                onHighlightPath={handleHighlightPathFromTrace}
-                />
-            );
-            }
-
+      if (currentView === ViewState.DEBUG) {
+        return (
+            <DebugTraceView
+              onJumpToAgent={handleJumpToAgentFromTrace}
+              onHighlightPath={handleHighlightPathFromTrace}
+            />
+        );
+      }
 
       if (currentView === ViewState.DOCS) {
           return <Documentation />;
