@@ -1,0 +1,75 @@
+{
+  "metadata": {
+    "name": "LeadQualificationFlow",
+    "version": "1.0.0",
+    "description": "B2B lead intake, kwalificatie en samenvatting voor sales.",
+    "created": "2025-12-07T20:15:00Z",
+    "modified": "2025-12-07T20:15:00Z"
+  },
+
+  "agents": [
+    {
+      "id": "agent_intake",
+      "name": "LeadIntakeBot",
+      "role": "Collector",
+      "model": { "provider": "openai", "name": "gpt-4.2-mini" },
+      "prompt": "lead_intake_prompt.txt",
+      "config": { "temperature": 0.2, "max_tokens": 400 },
+      "output_format": "json",
+      "description": "Zet vrije tekst om naar gestructureerde leaddata (bedrijf, grootte, use case)."
+    },
+    {
+      "id": "agent_qualifier",
+      "name": "LeadQualifier",
+      "role": "Analyst",
+      "model": { "provider": "google", "name": "gemini-2.5-flash" },
+      "prompt": "lead_qualification_prompt.txt",
+      "config": { "temperature": 0.4, "max_tokens": 600 },
+      "tools": ["crm_lookup"],
+      "output_format": "json",
+      "description": "Combineert input + CRM-data in een fit_score (0–100) en reden."
+    },
+    {
+      "id": "agent_summary",
+      "name": "SalesSummaryBot",
+      "role": "Writer",
+      "model": { "provider": "anthropic", "name": "claude-3-5-sonnet" },
+      "prompt": "lead_summary_prompt.txt",
+      "config": { "temperature": 0.6, "max_tokens": 800 },
+      "output_format": "markdown",
+      "description": "Maakt een korte salesbriefing (1–2 alinea’s + bullets) voor de account executive."
+    }
+  ],
+
+  "flow": {
+    "entry_agent": "agent_intake",
+
+    "logic": [
+      {
+        "id": "go_to_qualifier",
+        "from": "agent_intake",
+        "to": "agent_qualifier",
+        "condition": "always"
+      },
+      {
+        "id": "go_to_summary",
+        "from": "agent_qualifier",
+        "to": "agent_summary",
+        "condition": "output.fit_score >= 70"
+      }
+    ]
+  },
+
+  "tools": {
+    "crm_lookup": {
+      "type": "http",
+      "endpoint": "https://api.crm.internal/leads",
+      "method": "GET",
+      "description": "Zoek bestaande CRM-records op basis van e-mail of bedrijfsnaam."
+    }
+  },
+
+  "memory": {
+    "enabled": false
+  }
+}

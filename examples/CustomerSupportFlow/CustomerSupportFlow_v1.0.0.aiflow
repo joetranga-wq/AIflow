@@ -1,0 +1,70 @@
+{
+  "metadata": {
+    "name": "CustomerSupportFlow",
+    "version": "1.0.0"
+  },
+
+  "agents": [
+    {
+      "id": "triage",
+      "name": "Triage Bot",
+      "role": "support_triage",
+      "model": {
+        "provider": "gemini",
+        "name": "gemini-pro"
+      },
+      "prompt": "triage_prompt",
+      "output_format": "json",
+      "tools": []
+    },
+    {
+      "id": "human_escalation",
+      "name": "Human Support Agent",
+      "role": "support_handoff",
+      "model": {
+        "provider": "gemini",
+        "name": "gemini-pro"
+      },
+      "prompt": "escalation_prompt",
+      "output_format": "json",
+      "tools": []
+    },
+    {
+      "id": "automated_resolution",
+      "name": "Resolution Bot",
+      "role": "support_resolution",
+      "model": {
+        "provider": "gemini",
+        "name": "gemini-pro"
+      },
+      "prompt": "resolution_prompt",
+      "output_format": "json",
+      "tools": []
+    }
+  ],
+
+  "prompts": {
+    "triage_prompt": "You are a support triage bot. Analyze the user's issue and return JSON: { \"needs_human\": boolean, \"category\": string }. Only return JSON.",
+    "escalation_prompt": "You are a human escalation assistant. Prepare a handoff summary in JSON: { \"summary\": string }.",
+    "resolution_prompt": "You are an automated resolver. Provide a JSON resolution response: { \"resolved\": boolean, \"message\": string }."
+  },
+
+  "flow": {
+    "entry_agent": "triage",
+
+    "logic": [
+      {
+        "id": "rule_escalate",
+        "from": "triage",
+        "to": "human_escalation",
+        "condition": "output.needs_human == true"
+      },
+      {
+        "id": "rule_auto",
+        "from": "triage",
+        "to": "automated_resolution",
+        "condition": "output.needs_human == false"
+      }
+    ]
+  }
+}

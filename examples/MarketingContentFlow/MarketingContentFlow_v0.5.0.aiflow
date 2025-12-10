@@ -1,0 +1,75 @@
+{
+  "metadata": {
+    "name": "MarketingContentFlow",
+    "version": "0.5.0",
+    "description": "Genereert blogartikelen en social posts uit een contentidee.",
+    "created": "2025-12-05T10:00:00Z",
+    "modified": "2025-12-05T10:00:00Z"
+  },
+
+  "agents": [
+    {
+      "id": "agent_strategist",
+      "name": "ContentStrategist",
+      "role": "Planner",
+      "model": { "provider": "openai", "name": "gpt-4-turbo" },
+      "prompt": "strategy_prompt.txt",
+      "config": { "temperature": 0.7, "max_tokens": 1000 },
+      "tools": ["trend_analysis"],
+      "output_format": "json",
+      "description": "Ontwerpt een korte contentstrategie op basis van een onderwerp."
+    },
+    {
+      "id": "agent_writer",
+      "name": "BlogWriter",
+      "role": "Writer",
+      "model": { "provider": "anthropic", "name": "claude-3-opus" },
+      "prompt": "writer_prompt.txt",
+      "config": { "temperature": 0.8, "max_tokens": 3000 },
+      "output_format": "markdown",
+      "description": "Schrijft een long-form blogartikel in markdown."
+    },
+    {
+      "id": "agent_social",
+      "name": "SocialMediaManager",
+      "role": "Marketer",
+      "model": { "provider": "google", "name": "gemini-2.5-flash" },
+      "prompt": "social_prompt.txt",
+      "config": { "temperature": 0.9, "max_tokens": 500 },
+      "output_format": "json",
+      "description": "Genereert korte social posts (3 tweets + 1 LinkedIn)."
+    }
+  ],
+
+  "flow": {
+    "entry_agent": "agent_strategist",
+
+    "logic": [
+      {
+        "id": "strategy_approval",
+        "from": "agent_strategist",
+        "to": "agent_writer",
+        "condition": "output.approved == true"
+      },
+      {
+        "id": "writer_to_social",
+        "from": "agent_writer",
+        "to": "agent_social",
+        "condition": "always"
+      }
+    ]
+  },
+
+  "tools": {
+    "trend_analysis": {
+      "type": "http",
+      "endpoint": "https://api.trends.com/v1",
+      "method": "GET",
+      "description": "Analyses van actuele markt- en zoektrends."
+    }
+  },
+
+  "memory": {
+    "enabled": false
+  }
+}

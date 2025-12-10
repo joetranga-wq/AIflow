@@ -1,21 +1,20 @@
 # Logs
-logs
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
-yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
+node_modules/
+dist/
+dist-ssr/
 *.local
 
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
-.idea
+.idea/
 .DS_Store
 *.suo
 *.ntvs*
@@ -26,11 +25,12 @@ dist-ssr
 .env
 .env.local
 
-*.aiflow
+# Local-only automation outputs (KEEP .aiflow files)
+social/
+social_*          # any generated md or json
+examples/SocialDailyFlow/output/
+examples/SocialDailyFlow/logs/
+examples/SocialDailyFlow/social/
 
-# Social output (local only, not in Git)
-social/cron.log
-social/social_daily.md
-social/social_week.md
-social_week.md
-social/*.log
+# Cron log files
+*.cron.log
