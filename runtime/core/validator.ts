@@ -36,10 +36,16 @@ export function validateProject(project: any): ValidationIssue[] {
 
   const flow = project.flow ?? {};
   const agents = Array.isArray(project.agents) ? project.agents : [];
+  const logic = Array.isArray(flow.logic) ? flow.logic : [];
+  const prompts = project.prompts ?? null;
+  const tools = Array.isArray(project.tools) ? project.tools : [];
 
   issues.push(...validateEntryAgent(flow, agents));
   issues.push(...validateAgents(agents));
-  issues.push(...validateLogic(flow.logic ?? [], agents));
+  issues.push(...validateLogic(logic, agents));
+  issues.push(...validatePrompts(prompts, agents));
+  issues.push(...validateTools(tools, agents));
+  issues.push(...validateReachability(flow.entry_agent, agents, logic));
 
   return issues;
 }
@@ -145,6 +151,8 @@ function validateLogic(logic: any[], agents: any[]): ValidationIssue[] {
     return issues;
   }
 
+  const rulesByFrom: Record<string, any[]> = {};
+
   logic.forEach((rule, index) => {
     const path = `flow.logic[${index}]`;
 
@@ -199,7 +207,245 @@ function validateLogic(logic: any[], agents: any[]): ValidationIssue[] {
         path
       });
     }
-    // In v0.2+ kun je hier een condition-parser aanroepen om syntax te checken.
+
+    // Verzamel rules per from-agent voor conflict-detectie
+    if (rule.from) {
+      if (!rulesByFrom[rule.from]) {
+        rulesByFrom[rule.from] = [];
+      }
+      rulesByFrom[rule.from].push({ rule, index, path });
+    }
+  });
+
+  // Conflicten per from-agent
+  Object.entries(rulesByFrom).forEach(([fromId, entries]) => {
+    // 1) Meerdere "always" conditions vanaf dezelfde from
+    const alwaysRules = entries.filter(
+      (e) =>
+        typeof e.rule.condition === 'string' &&
+        e.rule.condition.trim().toLowerCase() === 'always'
+    );
+    if (alwaysRules.length > 1) {
+      issues.push({
+        level: 'warning',
+        code: 'LOGIC_MULTIPLE_ALWAYS',
+        message: `Agent "${fromId}" has multiple logic rules with condition "always". Execution order may be ambiguous.`,
+        path: `flow.logic`
+      });
+    }
+
+    // 2) Exact dezelfde condition meerdere keren
+    const seenConditions = new Map<string, number>();
+    for (const e of entries) {
+      const cond = String(e.rule.condition ?? '').trim();
+      if (!cond) continue;
+      const key = cond;
+      if (seenConditions.has(key)) {
+        issues.push({
+          level: 'warning',
+          code: 'LOGIC_DUPLICATE_CONDITION',
+          message: `Agent "${fromId}" has duplicate logic condition "${cond}".`,
+          path: `flow.logic[${e.index}]`
+        });
+      } else {
+        seenConditions.set(key, e.index);
+      }
+    }
+  });
+
+  return issues;
+}
+
+/**
+ * Prompt validation:
+ * - If project.prompts is an object map: { key: "prompt text" }
+ * - Agent.prompt can reference a key in project.prompts
+ */
+function validatePrompts(prompts: any, agents: any[]): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+
+  if (!prompts || typeof prompts !== 'object') {
+    // No global prompts defined – nothing to validate.
+    return issues;
+  }
+
+  const promptKeys = new Set<string>(Object.keys(prompts));
+  const usedPromptKeys = new Set<string>();
+
+  agents.forEach((agent, index) => {
+    const promptKey = agent?.prompt;
+    if (!promptKey) return;
+
+    const path = `agents[${index}].prompt`;
+    if (!promptKeys.has(promptKey)) {
+      issues.push({
+        level: 'error',
+        code: 'AGENT_UNKNOWN_PROMPT',
+        message: `Agent "${agent.id ?? `#${index}`}" references unknown prompt key "${promptKey}".`,
+        path
+      });
+    } else {
+      usedPromptKeys.add(promptKey);
+    }
+  });
+
+  // Unused prompts (nice to know, not fatal)
+  promptKeys.forEach((key) => {
+    if (!usedPromptKeys.has(key)) {
+      issues.push({
+        level: 'warning',
+        code: 'PROMPT_UNUSED',
+        message: `Prompt "${key}" is defined but not used by any agent.`,
+        path: `prompts["${key}"]`
+      });
+    }
+  });
+
+  return issues;
+}
+
+/**
+ * Tools validation:
+ * - project.tools: array of { id, ... }
+ * - agent.tools: array of tool ids
+ */
+function validateTools(tools: any[], agents: any[]): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+
+  if (!Array.isArray(tools) || tools.length === 0) {
+    // No tools defined – only validate that agents don't reference unknown tools.
+    agents.forEach((agent, index) => {
+      const agentTools: string[] = Array.isArray(agent?.tools) ? agent.tools : [];
+      if (agentTools.length > 0) {
+        issues.push({
+          level: 'warning',
+          code: 'AGENT_TOOLS_WITHOUT_REGISTRY',
+          message: `Agent "${agent.id ?? `#${index}`}" references tools, but project.tools is empty.`,
+          path: `agents[${index}].tools`
+        });
+      }
+    });
+    return issues;
+  }
+
+  const toolIds = new Set<string>();
+  tools.forEach((t, index) => {
+    if (!t || typeof t !== 'object' || !t.id) {
+      issues.push({
+        level: 'error',
+        code: 'TOOL_INVALID',
+        message: `Tool at index ${index} is missing an "id" field.`,
+        path: `tools[${index}]`
+      });
+      return;
+    }
+    if (toolIds.has(t.id)) {
+      issues.push({
+        level: 'error',
+        code: 'DUPLICATE_TOOL_ID',
+        message: `Duplicate tool id "${t.id}".`,
+        path: `tools[${index}].id`
+      });
+    }
+    toolIds.add(t.id);
+  });
+
+  const usedToolIds = new Set<string>();
+
+  agents.forEach((agent, index) => {
+    const agentTools: string[] = Array.isArray(agent?.tools) ? agent.tools : [];
+    agentTools.forEach((toolId) => {
+      const path = `agents[${index}].tools`;
+      if (!toolIds.has(toolId)) {
+        issues.push({
+          level: 'error',
+          code: 'AGENT_TOOL_UNKNOWN',
+          message: `Agent "${agent.id ?? `#${index}`}" references unknown tool "${toolId}".`,
+          path
+        });
+      } else {
+        usedToolIds.add(toolId);
+      }
+    });
+  });
+
+  // Unused tools (warning)
+  toolIds.forEach((id) => {
+    if (!usedToolIds.has(id)) {
+      issues.push({
+        level: 'warning',
+        code: 'TOOL_UNUSED',
+        message: `Tool "${id}" is defined but not used by any agent.`,
+        path: `tools`
+      });
+    }
+  });
+
+  return issues;
+}
+
+/**
+ * Reachability:
+ * - Starting from entry_agent, follow logic[from -> to]
+ * - Agents that are never reached: warning UNREACHABLE_AGENT
+ */
+function validateReachability(
+  entryAgent: string | undefined,
+  agents: any[],
+  logic: any[]
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+
+  if (!entryAgent) {
+    // Already handled as error in validateEntryAgent
+    return issues;
+  }
+
+  const agentIds = new Set(agents.map((a) => a?.id).filter(Boolean) as string[]);
+  if (!agentIds.has(entryAgent)) {
+    // Already handled as error
+    return issues;
+  }
+
+  const adjacency = new Map<string, Set<string>>();
+  logic.forEach((rule) => {
+    if (!rule || typeof rule !== 'object') return;
+    const from = rule.from;
+    const to = rule.to;
+    if (!from || !to) return;
+    if (!adjacency.has(from)) adjacency.set(from, new Set());
+    adjacency.get(from)!.add(to);
+  });
+
+  const reachable = new Set<string>();
+  const queue: string[] = [];
+
+  reachable.add(entryAgent);
+  queue.push(entryAgent);
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    const neighbors = adjacency.get(current);
+    if (!neighbors) continue;
+    neighbors.forEach((next) => {
+      if (!reachable.has(next) && agentIds.has(next)) {
+        reachable.add(next);
+        queue.push(next);
+      }
+    });
+  }
+
+  agents.forEach((agent, index) => {
+    const id = agent?.id;
+    if (!id) return;
+    if (!reachable.has(id)) {
+      issues.push({
+        level: 'warning',
+        code: 'UNREACHABLE_AGENT',
+        message: `Agent "${id}" is never reached from entry_agent "${entryAgent}".`,
+        path: `agents[${index}]`
+      });
+    }
   });
 
   return issues;
