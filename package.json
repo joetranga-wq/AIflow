@@ -9,7 +9,10 @@
     "preview": "vite preview",
     "run-flow": "node --experimental-strip-types runtime/cli/runAiflow.mts",
     "test": "vitest",
-    "test:watch": "vitest --watch"
+    "test:watch": "vitest --watch",
+    "social:daily": "node social/printSocialDaily.mjs",
+    "social:short": "node social/printTweetShort.mjs",
+    "social:week": "node social/printSocialWeek.mjs"
     
   },
   "dependencies": {

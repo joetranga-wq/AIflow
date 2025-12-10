@@ -27,3 +27,10 @@ dist-ssr
 .env.local
 
 *.aiflow
+
+# Social output (local only, not in Git)
+social/cron.log
+social/social_daily.md
+social/social_week.md
+social_week.md
+social/*.log
