@@ -7,7 +7,10 @@ import {
   Play,
   Square,
   Search,
+  Code,
+  X,
 } from 'lucide-react';
+import { evaluateExpression } from '../../runtime/core/conditionEngineV2';
 
 type TraceRule = {
   id: string;
@@ -93,6 +96,16 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
 
   const [diffModeByStep, setDiffModeByStep] = useState<Record<number, boolean>>(
     {}
+  );
+
+  // Condition Debugger state
+  const [isConditionPanelOpen, setIsConditionPanelOpen] = useState(false);
+  const [conditionExpression, setConditionExpression] = useState('');
+  const [conditionContextJson, setConditionContextJson] = useState('');
+  const [conditionResult, setConditionResult] = useState<boolean | null>(null);
+  const [conditionError, setConditionError] = useState<string | null>(null);
+  const [conditionSourceStep, setConditionSourceStep] = useState<number | null>(
+    null
   );
 
   const handleParse = () => {
@@ -187,6 +200,59 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
       setSelectedStepIndex(0);
     }
     setIsPlaying((prev) => !prev);
+  };
+
+  // Condition Debugger handlers
+  const handleOpenConditionDebugger = (
+    ruleCondition: string | null | undefined,
+    stepIndex: number
+  ) => {
+    if (!trace[stepIndex]) return;
+
+    const step = trace[stepIndex];
+    const globalContext = (context ?? {}) as Record<string, unknown>;
+
+    // Zelfde eval-context als in de CLI runtime
+    const evalContext = {
+      context: globalContext,
+      output: step.parsedOutput,
+      agentId: step.agentId,
+      // optioneel user-veld in context
+      user: (globalContext as any).user,
+    };
+
+    const condition = (ruleCondition ?? '').trim() || 'always';
+
+    setConditionExpression(condition);
+    setConditionContextJson(JSON.stringify(evalContext, null, 2));
+    setConditionResult(null);
+    setConditionError(null);
+    setConditionSourceStep(stepIndex);
+    setIsConditionPanelOpen(true);
+  };
+
+  const handleEvaluateCondition = () => {
+    if (!conditionExpression.trim()) {
+      setConditionError('Please enter a condition expression.');
+      setConditionResult(null);
+      return;
+    }
+
+    try {
+      const ctx = conditionContextJson.trim()
+        ? JSON.parse(conditionContextJson)
+        : {};
+      const result = evaluateExpression(conditionExpression, ctx);
+      setConditionResult(result);
+      setConditionError(null);
+    } catch (e: any) {
+      console.error(e);
+      setConditionError(
+        e?.message ??
+          'Failed to evaluate condition. Check your JSON context and expression.'
+      );
+      setConditionResult(null);
+    }
   };
 
   const handleHighlightFullPath = () => {
@@ -632,6 +698,20 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
                                         ROUTE SELECTED
                                       </span>
                                     )}
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleOpenConditionDebugger(
+                                          rule.condition,
+                                          originalIndex
+                                        )
+                                      }
+                                      className="inline-flex items-center px-1.5 py-0.5 rounded-md border border-slate-300 bg-white text-[10px] text-slate-700 hover:bg-slate-50"
+                                      title="Open this condition in the debugger"
+                                    >
+                                      <Code className="h-3 w-3 mr-1" />
+                                      Debug
+                                    </button>
                                   </div>
                                 </div>
                                 <p className="font-mono text-[11px] text-slate-700">
@@ -657,6 +737,110 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
           </div>
         )}
       </div>
+
+      {/* Condition Debugger */}
+      {isConditionPanelOpen && (
+        <div className="mt-8 grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Linker paneel: expression + resultaat */}
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-slate-800 flex items-center">
+                <Code className="h-4 w-4 mr-2 text-slate-400" />
+                Condition Debugger
+              </h2>
+              <button
+                type="button"
+                onClick={() => setIsConditionPanelOpen(false)}
+                className="inline-flex items-center justify-center h-7 w-7 rounded-full border border-slate-200 text-slate-500 hover:bg-slate-50"
+                title="Close debugger"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-500">
+              Evaluate a condition with the same context that the CLI used for
+              routing. Click <span className="font-mono">Debug</span> on a rule
+              to autofill this panel.
+            </p>
+
+            {conditionSourceStep !== null && trace[conditionSourceStep] && (
+              <p className="text-[11px] text-slate-500">
+                Source step:{' '}
+                <span className="font-mono text-slate-700">
+                  #{trace[conditionSourceStep].step} ·{' '}
+                  {trace[conditionSourceStep].agentName} (
+                  {trace[conditionSourceStep].agentId})
+                </span>
+              </p>
+            )}
+
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-slate-700">
+                Condition expression
+              </label>
+              <input
+                type="text"
+                value={conditionExpression}
+                onChange={(e) => setConditionExpression(e.target.value)}
+                className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-xs font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                placeholder={`e.g. output.needs_human == false && context.ticket_type == 'technical'`}
+              />
+            </div>
+
+            <div className="flex items-center space-x-2">
+              <button
+                type="button"
+                onClick={handleEvaluateCondition}
+                className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm"
+              >
+                Evaluate condition
+              </button>
+              {conditionResult !== null && (
+                <span
+                  className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-semibold ${
+                    conditionResult
+                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                      : 'bg-rose-50 text-rose-700 border border-rose-200'
+                  }`}
+                >
+                  Result: {conditionResult ? 'TRUE' : 'FALSE'}
+                </span>
+              )}
+            </div>
+
+            {conditionError && (
+              <div className="flex items-start space-x-2 text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs">
+                <AlertTriangle className="h-4 w-4 mt-0.5" />
+                <span>{conditionError}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Rechter paneel: JSON context */}
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 space-y-3">
+            <h3 className="text-sm font-semibold text-slate-800">
+              Evaluation context (JSON)
+            </h3>
+            <p className="text-[11px] text-slate-500">
+              This JSON is passed to{' '}
+              <span className="font-mono">evaluateExpression</span> as the{' '}
+              <span className="font-mono">ctx</span> argument. By default it
+              contains:
+              <span className="font-mono">
+                {' '}
+                {'{ context, output, agentId, user }'}
+              </span>{' '}
+              for the selected step.
+            </p>
+            <textarea
+              value={conditionContextJson}
+              onChange={(e) => setConditionContextJson(e.target.value)}
+              className="w-full h-56 border border-slate-300 rounded-lg px-3 py-2 font-mono text-[11px] text-slate-800 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-slate-50"
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 };

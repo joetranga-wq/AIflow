@@ -8,6 +8,8 @@ import ConsolePanel from './components/ConsolePanel';
 import Documentation from './components/Documentation';
 import DebugTraceView from './components/DebugTraceView';
 import ValidationPanel from './components/ValidationPanel';
+import { ConditionDebuggerPanel } from './components/ConditionDebuggerPanel';
+import { RuleInspectorPanel } from './components/RuleInspectorPanel';
 import { validateProject, hasValidationErrors, ValidationIssue } from '../runtime/core/validator';
 
 import { WorkflowRunner, LogEntry } from '../runtime/browser/WorkflowRunner';
@@ -19,6 +21,7 @@ import {
   FileText, Trash2, Globe, Calculator, Code, Terminal, Check,
   Download, Upload, Network, Link, AlertTriangle, Square, HardDrive, Key, X
 } from 'lucide-react';
+
 
 interface ProjectSession {
     id: string; 
@@ -53,11 +56,14 @@ const App: React.FC = () => {
   const [isDirty, setIsDirty] = useState(false);
 
   // UI State
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
-  const [editingLink, setEditingLink] = useState<{id: string, condition: string, mapping?: string} | null>(null);
-  const [highlightedNodeIds, setHighlightedNodeIds] = useState<string[]>([]);
-  const [highlightedEdges, setHighlightedEdges] = useState<{ from: string; to: string }[]>([]);
-  const [isLinkingMode, setIsLinkingMode] = useState(false);
+const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+const [selectedConditionTrace, setSelectedConditionTrace] = useState<any | null>(null);
+const [selectedLogicLinkId, setSelectedLogicLinkId] = useState<string | null>(null);
+const [editingLink, setEditingLink] = useState<{id: string, condition: string, mapping?: string} | null>(null);
+const [highlightedNodeIds, setHighlightedNodeIds] = useState<string[]>([]);
+const [highlightedEdges, setHighlightedEdges] = useState<{ from: string; to: string }[]>([]);
+const [isLinkingMode, setIsLinkingMode] = useState(false);
+
 
   const [linkingSourceId, setLinkingSourceId] = useState<string | null>(null);
   const [activePromptFile, setActivePromptFile] = useState<string | null>(null);
@@ -84,6 +90,23 @@ const App: React.FC = () => {
   const activeSession = sessions.find(s => s.id === activeSessionId) || sessions[0];
   const project = activeSession.history[activeSession.historyIndex];
   const historyIndex = activeSession.historyIndex;
+
+    // Selected logic link (edge) for Rule Inspector
+  const selectedLogicLink = useMemo(() => {
+    if (!selectedLogicLinkId) return null;
+    return (project.flow.logic as any[]).find((l) => l.id === selectedLogicLinkId) ?? null;
+  }, [project.flow.logic, selectedLogicLinkId]);
+
+  const selectedLinkFromAgent = useMemo(() => {
+    if (!selectedLogicLink) return null;
+    return project.agents.find((a) => a.id === (selectedLogicLink as any).from) ?? null;
+  }, [project.agents, selectedLogicLink]);
+
+  const selectedLinkToAgent = useMemo(() => {
+    if (!selectedLogicLink) return null;
+    return project.agents.find((a) => a.id === (selectedLogicLink as any).to) ?? null;
+  }, [project.agents, selectedLogicLink]);
+
 
   // ✅ Map validator issues → per-agent error/warning counts
   const validationByAgentId = useMemo(() => {
@@ -187,6 +210,63 @@ const App: React.FC = () => {
     }
     setCurrentView(ViewState.WORKFLOW);
   };
+
+  // 👉 Wanneer een edge (logic link) in de graph wordt aangeklikt
+const handleSelectLogicLinkFromGraph = (linkId: string) => {
+  setSelectedLogicLinkId(linkId);
+
+  // Zoek de bijbehorende link in het project
+  const link = (project.flow.logic as any[]).find((l) => l.id === linkId);
+  if (!link) return;
+
+  // Selecteer de FROM-agent zodat rechts de juiste Agent Configuration zichtbaar is
+  const fromAgent = project.agents.find((a) => a.id === link.from);
+  if (fromAgent) {
+    setSelectedAgentId(fromAgent.id);
+  }
+
+  // Zorg dat we in de Workflow view zitten
+  setCurrentView(ViewState.WORKFLOW);
+};
+
+
+  // Condition Debugger – vanuit een geselecteerde link (edge)
+const handleDebugRuleFromLink = (link: any) => {
+  if (!link) return;
+
+  const expression = link.condition || String(link.label || 'true');
+
+  // 📌 1. Zorg dat we in de Workflow view zitten
+  setCurrentView(ViewState.WORKFLOW);
+
+  // 📌 2. Selecteer de "FROM" agent van deze edge,
+  // zodat het Agent Configuration-paneel klopt.
+  const fromAgent = project.agents.find((a) => a.id === link.from);
+  if (fromAgent) {
+    setSelectedAgentId(fromAgent.id);
+  }
+
+  // 📌 3. Bouw een simpele ConditionTrace (preview)
+  const trace = {
+    conditionId: link.id || 'edge',
+    runId: 'design-preview',
+    expression,
+    result: 'true' as const,
+    root: {
+      id: 'root',
+      type: 'LITERAL',
+      value: true,
+      raw: expression,
+      children: [],
+    },
+    referencedFields: [],
+    expressionWithValues: expression,
+  };
+
+  setSelectedConditionTrace(trace);
+};
+
+
 
   // --- Helpers ---
 
@@ -636,6 +716,7 @@ const App: React.FC = () => {
   };
 
   
+  
   // ✅ Validation handler (handmatige knop)
   const handleValidateProject = () => {
     const issues = validateProject(project);
@@ -723,7 +804,7 @@ const App: React.FC = () => {
           return (
             <div className="p-8 max-w-3xl mx-auto">
                 <h1 className="text-3xl font-bold text-slate-900 mb-8">Settings</h1>
-                <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-6">
+                <div className="bg-white rounded-xl border-slate-200 shadow-sm p-6 space-y-6 border">
                     <div>
                         <label className="block text-sm font-medium text-slate-700 mb-2">Global API Key (Gemini)</label>
                         <div className="flex space-x-2">
@@ -806,14 +887,85 @@ const App: React.FC = () => {
                         {/* ✅ Validate button */}
                         <button 
                           onClick={handleValidateProject}
-                          className="flex items- center px-3 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 shadow-sm font-medium text-sm"
+                          className="flex items-center px-3 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 shadow-sm font-medium text-sm"
                           title="Validate flow structure"
                         >
                           <Check size={16} className="mr-2" />
                           Validate
                         </button>
 
+                        {/* ✅ Demo button voor Condition Debugger */}
+                        <button
+                          onClick={() => {
+                            const demoTrace = {
+                              conditionId: "demo",
+                              runId: "demo-run",
+                              expression: "(customer.age >= 18 && country == 'NL')",
+                              result: "true",
+                              root: {
+                                id: "root",
+                                type: "AND",
+                                operator: "&&",
+                                value: true,
+                                raw: "(customer.age >= 18 && country == 'NL')",
+                                children: [
+                                  {
+                                    id: "age-compare",
+                                    type: "COMPARE",
+                                    operator: ">=",
+                                    value: true,
+                                    raw: "customer.age >= 18",
+                                    children: [
+                                      { id: "age-field", type: "FIELD", raw: "customer.age", value: 21 },
+                                      { id: "age-literal", type: "LITERAL", raw: "18", value: 18 },
+                                    ],
+                                  },
+                                  {
+                                    id: "country-compare",
+                                    type: "COMPARE",
+                                    operator: "==",
+                                    value: true,
+                                    raw: "country == 'NL'",
+                                    children: [
+                                      { id: "country-field", type: "FIELD", raw: "country", value: "NL" },
+                                      { id: "country-literal", type: "LITERAL", raw: "'NL'", value: "NL" },
+                                    ],
+                                  },
+                                ],
+                              },
+                              referencedFields: [
+                                { path: "customer.age", value: 21, sourceNodeId: selectedAgentId ?? "agent_1" },
+                                { path: "country", value: "NL", sourceNodeId: selectedAgentId ?? "agent_1" },
+                              ],
+                              expressionWithValues: "(21 >= 18 && 'NL' == 'NL')",
+                            };
+                            setSelectedConditionTrace(demoTrace);
+                          }}
+                          className="flex items-center px-3 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 shadow-sm font-medium text-sm"
+                          title="Open Condition Debugger met demo rule"
+                        >
+                          <Code size={16} className="mr-2" />
+                          Debug demo rule
+                        </button>
+
                         <div className="h-8 w-px bg-slate-300 mx-2"></div>
+
+                            <button
+                            className="inline-flex items-center px-3 py-1.5 text-xs rounded-full border border-slate-200 text-slate-600 hover:bg-slate-50 gap-2"
+                            onClick={() => {
+                                const links = project.flow.logic as any[];
+                                if (!Array.isArray(links) || links.length === 0) return;
+
+                                const firstLink = links[0];
+                                setSelectedLogicLinkId(firstLink.id);
+                                handleDebugRuleFromLink(firstLink);
+                            }}
+                            >
+                            <span className="w-4 h-4 rounded-full border border-slate-300 flex items-center justify-center text-[9px]">
+                                ?
+                            </span>
+                            Debug first rule
+                            </button>
 
                         <button 
                             onClick={() => setIsLinkingMode(!isLinkingMode)}
@@ -883,20 +1035,24 @@ const App: React.FC = () => {
                     <div className="flex-1 flex gap-6 min-h-0">
                       <div className="flex-1">
                         <WorkflowGraph 
-                            project={project} 
-                            onSelectAgent={setSelectedAgentId}
-                            onEditCondition={(id, c) => setEditingLink({id, condition: c})}
-                            onNavigateToPrompt={handleNavigateToPrompt}
-                            onNavigateToTools={handleNavigateToTools}
-                            isLinkingMode={isLinkingMode}
-                            linkingSourceId={linkingSourceId}
-                            onNodeClick={handleNodeClick}
-                            selectedNodeId={selectedAgentId}
-                            onLinkCreate={handleLinkCreate}
-                            highlightedNodeIds={highlightedNodeIds}
-                            highlightedEdges={highlightedEdges}
-                            validationByAgentId={validationByAgentId}
+                        project={project} 
+                        onSelectAgent={setSelectedAgentId}
+                        onEditCondition={(id, c) => setEditingLink({ id, condition: c })}
+                        onNavigateToPrompt={handleNavigateToPrompt}
+                        onNavigateToTools={handleNavigateToTools}
+                        isLinkingMode={isLinkingMode}
+                        linkingSourceId={linkingSourceId}
+                        onNodeClick={handleNodeClick}
+                        selectedNodeId={selectedAgentId}
+                        onLinkCreate={handleLinkCreate}
+                        highlightedNodeIds={highlightedNodeIds}
+                        highlightedEdges={highlightedEdges}
+                        validationByAgentId={validationByAgentId}
+                        // 🆕 Edge selection vanuit de graph
+                        selectedLinkId={selectedLogicLinkId}
+                        onSelectLink={handleSelectLogicLinkFromGraph}
                         />
+
                       </div>
                       {selectedNode && (
                         <div className="w-1/3 min-w-[400px]">
@@ -918,16 +1074,44 @@ const App: React.FC = () => {
                       )}
                     </div>
 
-                    {/* Rechter deel: Validation Panel */}
-                    {isValidationPanelOpen && (
-                      <div className="w-[360px] h-full">
-                        <ValidationPanel
-                          issues={validationIssues ?? []}
-                          isOpen={isValidationPanelOpen}
-                          onClose={() => setIsValidationPanelOpen(false)}
-                          onSelectIssue={handleSelectValidationIssue}
-                        />
-                      </div>
+                    {/* Rechter deel: Validation Panel + Condition Debugger */}
+                    {(isValidationPanelOpen || selectedConditionTrace) && (
+                        <div className="w-[360px] h-full flex flex-col gap-3">
+                        {/* Validation */}
+                        {isValidationPanelOpen && (
+                            <div className="flex-none">
+                            <ValidationPanel
+                                issues={validationIssues ?? []}
+                                isOpen={isValidationPanelOpen}
+                                onClose={() => setIsValidationPanelOpen(false)}
+                                onSelectIssue={handleSelectValidationIssue}
+                            />
+                            </div>
+                        )}
+
+                        {/* Rule Inspector – toont info over de geselecteerde edge */}
+                        {selectedLogicLink && (
+                            <div className="flex-none">
+                            <RuleInspectorPanel
+                                link={selectedLogicLink as any}
+                                fromAgent={selectedLinkFromAgent as any}
+                                toAgent={selectedLinkToAgent as any}
+                                onClose={() => setSelectedLogicLinkId(null)}
+                                onDebugRule={() => handleDebugRuleFromLink(selectedLogicLink)}
+                            />
+                            </div>
+                        )}
+
+                        {/* Condition Debugger – toont uitleg waarom TRUE/FALSE */}
+                        {selectedConditionTrace && (
+                            <div className="flex-1 min-h-[260px]">
+                            <ConditionDebuggerPanel
+                                trace={selectedConditionTrace}
+                                onClose={() => setSelectedConditionTrace(null)}
+                            />
+                            </div>
+                        )}
+                        </div>
                     )}
                 </div>
 
