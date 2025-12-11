@@ -17,6 +17,9 @@ interface WorkflowGraphProps {
   onLinkCreate?: (sourceId: string, targetId: string) => void;
   highlightedNodeIds?: string[];
   highlightedEdges?: { from: string; to: string }[];
+
+  // ✅ Nieuw: validation counts per agent (errors/warnings)
+  validationByAgentId?: Record<string, { errors: number; warnings: number }>;
 }
 
 const WorkflowGraph: React.FC<WorkflowGraphProps> = ({ 
@@ -32,10 +35,12 @@ const WorkflowGraph: React.FC<WorkflowGraphProps> = ({
     onLinkCreate,
     highlightedNodeIds,
     highlightedEdges,
+    validationByAgentId,
 }) => {
   const svgRef = useRef<SVGSVGElement>(null);
   const simulationRef = useRef<any>(null);
-  const nodesRef = useRef<any[]>([]); 
+  const nodesRef = useRef<any[]>([]);
+  const zoomRef = useRef<any>(null);
   
   // We use a ref to track linking mode inside D3 callbacks to avoid stale closures
   const isLinkingRef = useRef(isLinkingMode);
@@ -102,15 +107,19 @@ const WorkflowGraph: React.FC<WorkflowGraphProps> = ({
     // --- Graph Container ---
     const g = svg.append("g");
     const zoom = d3.zoom()
-        .scaleExtent([0.1, 4])
-        .on("zoom", (event: any) => {
-            g.attr("transform", event.transform);
-        });
+      .scaleExtent([0.1, 4])
+      .on("zoom", (event: any) => {
+        g.attr("transform", event.transform);
+      });
+
+    zoomRef.current = zoom;
     svg.call(zoom).on("dblclick.zoom", null);
 
     // --- Data Preparation ---
     const nodes = project.agents.map(a => {
         const prev = nodesRef.current.find(n => n.id === a.id);
+        const validation = validationByAgentId?.[a.id];
+
         return { 
             id: a.id, 
             name: a.name, 
@@ -119,6 +128,11 @@ const WorkflowGraph: React.FC<WorkflowGraphProps> = ({
             isTool: a.role === 'Tool',
             promptFile: a.prompt,
             executionStatus: a.executionStatus,
+
+            // ✅ Nieuw: validation counts op node zelf
+            errorCount: validation?.errors ?? 0,
+            warningCount: validation?.warnings ?? 0,
+
             x: prev ? prev.x : Math.random() * width,
             y: prev ? prev.y : Math.random() * height,
             vx: prev ? prev.vx : 0,
@@ -182,6 +196,103 @@ const WorkflowGraph: React.FC<WorkflowGraphProps> = ({
       .attr("text-anchor", "middle")
       .attr("dy", 4)
       .style("user-select", "none");
+
+    // --- Edge Hover Hints (line + label highlight) ---
+    linkGroup
+      .on("mouseenter", function (event: any, d: any) {
+        d3.select(this)
+          .transition()
+          .duration(120)
+          .attr("stroke", "#6366F1")
+          .attr("stroke-width", 3);
+
+        labelGroup
+          .filter((ld: any) => ld === d)
+          .raise()
+          .select("rect")
+          .transition()
+          .duration(120)
+          .attr("fill", "#EEF2FF")
+          .attr("stroke", "#6366F1");
+
+        labelGroup
+          .filter((ld: any) => ld === d)
+          .select("text")
+          .transition()
+          .duration(120)
+          .attr("fill", "#4F46E5");
+      })
+      .on("mouseleave", function (event: any, d: any) {
+        d3.select(this)
+          .transition()
+          .duration(120)
+          .attr("stroke", "#CBD5E1")
+          .attr("stroke-width", 2);
+
+        labelGroup
+          .filter((ld: any) => ld === d)
+          .select("rect")
+          .transition()
+          .duration(120)
+          .attr("fill", "#F8FAFC")
+          .attr("stroke", "#E2E8F0");
+
+        labelGroup
+          .filter((ld: any) => ld === d)
+          .select("text")
+          .transition()
+          .duration(120)
+          .attr("fill", "#64748B");
+      });
+
+    labelGroup
+      .on("mouseenter", function (event: any, d: any) {
+        labelGroup
+          .filter((ld: any) => ld === d)
+          .raise()
+          .select("rect")
+          .transition()
+          .duration(120)
+          .attr("fill", "#EEF2FF")
+          .attr("stroke", "#6366F1");
+
+        linkGroup
+          .filter((ld: any) => ld === d)
+          .transition()
+          .duration(120)
+          .attr("stroke", "#6366F1")
+          .attr("stroke-width", 3);
+
+        labelGroup
+          .filter((ld: any) => ld === d)
+          .select("text")
+          .transition()
+          .duration(120)
+          .attr("fill", "#4F46E5");
+      })
+      .on("mouseleave", function (event: any, d: any) {
+        labelGroup
+          .filter((ld: any) => ld === d)
+          .select("rect")
+          .transition()
+          .duration(120)
+          .attr("fill", "#a0bcd8ff")
+          .attr("stroke", "#E2E8F0");
+
+        linkGroup
+          .filter((ld: any) => ld === d)
+          .transition()
+          .duration(120)
+          .attr("stroke", "#CBD5E1")
+          .attr("stroke-width", 2);
+
+        labelGroup
+          .filter((ld: any) => ld === d)
+          .select("text")
+          .transition()
+          .duration(120)
+          .attr("fill", "#64748B");
+      });
 
     // --- Drag Line (for linking mode) ---
     const dragLine = g.append("line")
@@ -357,6 +468,37 @@ const WorkflowGraph: React.FC<WorkflowGraphProps> = ({
         }
     });
 
+    // ✅ Validation Badges (errors / warnings) – rode/gele bubbles linksboven
+    agentNodes.each(function(this: any, d: any) {
+      const errors = d.errorCount || 0;
+      const warnings = d.warningCount || 0;
+
+      if (!errors && !warnings) return;
+
+      const hasErrors = errors > 0;
+
+      const badge = d3.select(this)
+        .append('g')
+        .attr('class', 'validation-badge')
+        .attr('transform', 'translate(-85,-32)');
+
+      badge
+        .append('circle')
+        .attr('r', 9)
+        .attr('fill', hasErrors ? '#FEE2E2' : '#FEF3C7')     // rood / geel achtergrond
+        .attr('stroke', hasErrors ? '#EF4444' : '#F59E0B')   // rood / oranje rand
+        .attr('stroke-width', 1.5);
+
+      badge
+        .append('text')
+        .attr('text-anchor', 'middle')
+        .attr('dy', '0.35em')
+        .attr('font-size', 9)
+        .attr('font-weight', 600)
+        .attr('fill', hasErrors ? '#B91C1C' : '#92400E')
+        .text(hasErrors ? errors : warnings);
+    });
+
     // --- Path Step Badge (small circle with step number) ---
     const badgeGroup = agentNodes
       .append('g')
@@ -424,7 +566,7 @@ const WorkflowGraph: React.FC<WorkflowGraphProps> = ({
     const createHoverBtn = (svgContent: string, title: string, onClick: (d: any) => void) => {
         actionContainer.append("xhtml:button")
             .attr("title", title)
-            .style("width", "24px").style("height", "24px").style("border-radius", "12px").style("background", "white").style("border", "1px solid #E2E8F0").style("color", "#475569").style("display", "flex").style("align-items", "center").style("justify-content", "center").style("cursor", "pointer").style("box-shadow", "0 2px 4px rgba(0,0,0,0.05)")
+            .style("width", "24px").style("height", "24px").style("border-radius", "12px").style("background", "white").style("border", "1px solid #E2E8F0").style("color", " #475569").style("display", "flex").style("align-items", "center").style("justify-content", "center").style("cursor", "pointer").style("box-shadow", "0 2px 4px rgba(0,0,0,0.05)")
             .html(svgContent)
             .on("click", (e: any, d: any) => { e.stopPropagation(); onClick(d); });
     };
@@ -460,7 +602,54 @@ const WorkflowGraph: React.FC<WorkflowGraphProps> = ({
         simulation.stop();
         simulationRef.current = null;
     };
-  }, [project.agents.length, project.flow.logic.length, project.flow.entry_agent]);
+  }, [project.agents.length, project.flow.logic.length, project.flow.entry_agent, validationByAgentId]);
+
+  // --- React Effect for Auto Zoom to Selected Node ---
+  useEffect(() => {
+    if (!selectedNodeId) return;
+    if (!svgRef.current || !zoomRef.current) return;
+
+    const svg = d3.select(svgRef.current);
+    const node = nodesRef.current.find((n: any) => n.id === selectedNodeId);
+    if (!node) return;
+
+    const width = svgRef.current.clientWidth || 800;
+    const height = svgRef.current.clientHeight || 600;
+
+    const scale = 1.25;
+    const targetX = width / 2 - node.x * scale;
+    const targetY = height / 2 - node.y * scale;
+
+    svg
+      .transition()
+      .duration(450)
+      .call(
+        (zoomRef.current as any).transform,
+        d3.zoomIdentity.translate(targetX, targetY).scale(scale)
+      );
+  }, [selectedNodeId]);
+
+  // --- React Effect for Small Flash on Selected Node ---
+  useEffect(() => {
+    if (!selectedNodeId || !svgRef.current) return;
+
+    const svg = d3.select(svgRef.current);
+    const rect = svg
+      .selectAll(".node-group")
+      .filter((d: any) => d.id === selectedNodeId)
+      .select(".node-rect");
+
+    if (rect.empty()) return;
+
+    // Kleine flash: kort wat dikkere stroke, dan terug naar 4
+    rect
+      .transition("flash")
+      .duration(0)
+      .attr("stroke-width", 6)
+      .transition("flash")
+      .duration(300)
+      .attr("stroke-width", 4);
+  }, [selectedNodeId]);
 
   // --- React Effect for Selections/Mode ---
   useEffect(() => {

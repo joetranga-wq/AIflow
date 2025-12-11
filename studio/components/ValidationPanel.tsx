@@ -4,7 +4,11 @@ import type { ValidationIssue } from '../../runtime/core/validator';
 
 interface ValidationPanelProps {
   issues: ValidationIssue[];
-  onClose?: () => void;
+  isOpen: boolean;
+  onClose: () => void;
+
+  // Klik op een issue -> wordt in App.tsx afgehandeld
+  onSelectIssue?: (issue: ValidationIssue) => void;
 }
 
 const levelColor: Record<ValidationIssue['level'], string> = {
@@ -19,8 +23,15 @@ const levelLabel: Record<ValidationIssue['level'], string> = {
 
 export const ValidationPanel: React.FC<ValidationPanelProps> = ({
   issues,
+  isOpen,
   onClose,
+  onSelectIssue,
 }) => {
+  // Paneel verbergen als het "dicht" staat
+  if (!isOpen) {
+    return null;
+  }
+
   const hasErrors = issues.some((i) => i.level === 'error');
 
   return (
@@ -113,11 +124,14 @@ export const ValidationPanel: React.FC<ValidationPanelProps> = ({
             {issues.map((issue, index) => (
               <div
                 key={index}
+                onClick={() => onSelectIssue && onSelectIssue(issue)}
                 style={{
                   padding: 10,
                   borderRadius: 8,
                   background: levelColor[issue.level],
                   fontSize: 12,
+                  cursor: onSelectIssue ? 'pointer' : 'default',
+                  border: '1px solid rgba(0,0,0,0.03)',
                 }}
               >
                 <div

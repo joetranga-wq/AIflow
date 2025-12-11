@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
 import WorkflowGraph from './components/WorkflowGraph';
@@ -84,7 +84,41 @@ const App: React.FC = () => {
   const activeSession = sessions.find(s => s.id === activeSessionId) || sessions[0];
   const project = activeSession.history[activeSession.historyIndex];
   const historyIndex = activeSession.historyIndex;
-  
+
+  // ✅ Map validator issues → per-agent error/warning counts
+  const validationByAgentId = useMemo(() => {
+    const map: Record<string, { errors: number; warnings: number }> = {};
+
+    if (!validationIssues || !Array.isArray(validationIssues)) {
+      return map;
+    }
+
+    validationIssues.forEach((issue) => {
+      if (!issue.path) return;
+
+      // Voorbeeld paths: "agents[0].prompt", "agents[2].tools[1]", etc.
+      const match = issue.path.match(/^agents\[(\d+)\]/);
+      if (!match) return;
+
+      const index = Number(match[1]);
+      const agent = project.agents[index];
+      if (!agent || !agent.id) return;
+
+      const key = agent.id;
+      if (!map[key]) {
+        map[key] = { errors: 0, warnings: 0 };
+      }
+
+      if (issue.level === 'error') {
+        map[key].errors += 1;
+      } else {
+        map[key].warnings += 1;
+      }
+    });
+
+    return map;
+  }, [validationIssues, project.agents]);
+
   // Initialize run inputs from project defaults
   useEffect(() => {
       const defaults: Record<string, string> = {};
@@ -601,7 +635,8 @@ const App: React.FC = () => {
       });
   };
 
-  // ✅ Validation handler
+  
+  // ✅ Validation handler (handmatige knop)
   const handleValidateProject = () => {
     const issues = validateProject(project);
     setValidationIssues(issues);
@@ -611,6 +646,38 @@ const App: React.FC = () => {
       alert('✅ Project is valid. No structural issues found.');
     }
   };
+
+  // ✅ Klik op validation issue -> jump naar juiste agent/node
+  const handleSelectValidationIssue = (issue: ValidationIssue) => {
+    if (!issue.path) return;
+
+    // Paden als "agents[3].prompt", "agents[1].tools[0]" etc.
+    const match = issue.path.match(/^agents\[(\d+)\]/);
+    if (!match) return;
+
+    const index = Number(match[1]);
+    const agent = project.agents[index];
+    if (!agent) return;
+
+    // Zorg dat we in de Workflow Builder zitten
+    setCurrentView(ViewState.WORKFLOW);
+
+    // Selecteer de node/agent in graph + rechterpaneel
+    setSelectedAgentId(agent.id);
+  };
+
+  // ✅ Live Validator – automatisch tijdens editen in Workflow view
+  useEffect(() => {
+    if (currentView !== ViewState.WORKFLOW) return;
+
+    const timeout = setTimeout(() => {
+      const issues = validateProject(project);
+      setValidationIssues(issues);
+      // Panel niet forceren; alleen data updaten
+    }, 400);
+
+    return () => clearTimeout(timeout);
+  }, [currentView, project]);
 
   // --- Render Views ---
   const renderContent = () => {
@@ -680,6 +747,10 @@ const App: React.FC = () => {
 
       if (currentView === ViewState.WORKFLOW) {
           const selectedNode = project.agents.find(a => a.id === selectedAgentId);
+          const issues = validationIssues ?? [];
+          const errorCount = issues.filter(i => i.level === 'error').length;
+          const warningCount = issues.filter(i => i.level === 'warning').length;
+
           return (
             <div className="p-6 h-screen flex flex-col relative">
                 <div className="flex justify-between items-center mb-6">
@@ -692,6 +763,23 @@ const App: React.FC = () => {
                             <div className="flex items-center px-3 py-1 bg-amber-50 text-amber-700 text-xs font-medium rounded-full border border-amber-200 animate-pulse">
                                 <AlertTriangle size={12} className="mr-1" /> Unsaved Changes
                             </div>
+                        )}
+
+                        {issues.length > 0 && (
+                          <div className="flex items-center px-3 py-1 bg-red-50 text-red-700 text-xs font-medium rounded-full border border-red-200">
+                            <AlertTriangle size={12} className="mr-1" />
+                            {errorCount > 0 && (
+                              <span>
+                                {errorCount} error{errorCount !== 1 ? 's' : ''}
+                              </span>
+                            )}
+                            {errorCount > 0 && warningCount > 0 && <span className="mx-1">·</span>}
+                            {warningCount > 0 && (
+                              <span>
+                                {warningCount} warning{warningCount !== 1 ? 's' : ''}
+                              </span>
+                            )}
+                          </div>
                         )}
                     </div>
                     <div className="flex space-x-2">
@@ -718,7 +806,7 @@ const App: React.FC = () => {
                         {/* ✅ Validate button */}
                         <button 
                           onClick={handleValidateProject}
-                          className="flex items-center px-3 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 shadow-sm font-medium text-sm"
+                          className="flex items- center px-3 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 shadow-sm font-medium text-sm"
                           title="Validate flow structure"
                         >
                           <Check size={16} className="mr-2" />
@@ -807,6 +895,7 @@ const App: React.FC = () => {
                             onLinkCreate={handleLinkCreate}
                             highlightedNodeIds={highlightedNodeIds}
                             highlightedEdges={highlightedEdges}
+                            validationByAgentId={validationByAgentId}
                         />
                       </div>
                       {selectedNode && (
@@ -834,7 +923,9 @@ const App: React.FC = () => {
                       <div className="w-[360px] h-full">
                         <ValidationPanel
                           issues={validationIssues ?? []}
+                          isOpen={isValidationPanelOpen}
                           onClose={() => setIsValidationPanelOpen(false)}
+                          onSelectIssue={handleSelectValidationIssue}
                         />
                       </div>
                     )}
