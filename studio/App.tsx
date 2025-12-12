@@ -63,9 +63,13 @@ const [selectedLogicLinkId, setSelectedLogicLinkId] = useState<string | null>(nu
 const [editingLink, setEditingLink] = useState<{id: string, condition: string, mapping?: string} | null>(null);
 const [highlightedNodeIds, setHighlightedNodeIds] = useState<string[]>([]);
 const [highlightedEdges, setHighlightedEdges] = useState<{ from: string; to: string }[]>([]);
-const [isLinkingMode, setIsLinkingMode] = useState(false);
 
+// NEW: Edge status (ok | autofix | error)
+const [edgeStatusByLinkId, setEdgeStatusByLinkId] = useState<
+  Record<string, 'ok' | 'autofix' | 'error'>
+>({});
 
+  const [isLinkingMode, setIsLinkingMode] = useState(false);
   const [linkingSourceId, setLinkingSourceId] = useState<string | null>(null);
   const [activePromptFile, setActivePromptFile] = useState<string | null>(null);
   const [promptContent, setPromptContent] = useState("");
@@ -108,40 +112,34 @@ const [isLinkingMode, setIsLinkingMode] = useState(false);
     return project.agents.find((a) => a.id === (selectedLogicLink as any).to) ?? null;
   }, [project.agents, selectedLogicLink]);
 
-
   // ✅ Map validator issues → per-agent error/warning counts
-  const validationByAgentId = useMemo(() => {
-    const map: Record<string, { errors: number; warnings: number }> = {};
+const validationByAgentId = useMemo(() => {
+  const map: Record<string, { errors: number; warnings: number }> = {};
 
-    if (!validationIssues || !Array.isArray(validationIssues)) {
-      return map;
+  if (!validationIssues || !Array.isArray(validationIssues)) {
+    return map;
+  }
+
+  validationIssues.forEach((issue) => {
+    if (!issue.path) return;
+
+    const agentId = issue.path[0];
+    if (!map[agentId]) {
+      map[agentId] = { errors: 0, warnings: 0 };
     }
 
-    validationIssues.forEach((issue) => {
-      if (!issue.path) return;
+    if (issue.level === "error") {
+      map[agentId].errors += 1;
+    } else {
+      map[agentId].warnings += 1;
+    }
+  });
 
-      // Voorbeeld paths: "agents[0].prompt", "agents[2].tools[1]", etc.
-      const match = issue.path.match(/^agents\[(\d+)\]/);
-      if (!match) return;
+  return map;
+}, [validationIssues]);
 
-      const index = Number(match[1]);
-      const agent = project.agents[index];
-      if (!agent || !agent.id) return;
 
-      const key = agent.id;
-      if (!map[key]) {
-        map[key] = { errors: 0, warnings: 0 };
-      }
 
-      if (issue.level === 'error') {
-        map[key].errors += 1;
-      } else {
-        map[key].warnings += 1;
-      }
-    });
-
-    return map;
-  }, [validationIssues, project.agents]);
 
   // Initialize run inputs from project defaults
   useEffect(() => {
@@ -246,6 +244,33 @@ const collectFieldPathsForContext = (obj: any, prefix = ''): string[] => {
 
   return paths;
 };
+
+// Bouw canonical + alias veldnamen uit een context
+const buildKnownFieldsFromContext = (context: any) => {
+  const allPaths = collectFieldPathsForContext(context);
+  const uniquePaths = Array.from(new Set(allPaths));
+
+  return uniquePaths.map((p) => {
+    const isSnakeOnly = p.includes("_") && !p.includes(".");
+    const canonical = isSnakeOnly ? p.replace(/_/g, ".") : p;
+    const last = canonical.split(".").pop()!;
+    const snake = canonical.replace(/\./g, "_");
+
+    return {
+      id: canonical,
+      path: canonical,
+      label: canonical,
+      aliases: [
+        canonical,  // ticket.type
+        snake,      // ticket_type
+        last,       // type
+        p           // original path
+      ],
+    };
+  });
+};
+
+
 // Condition Debugger – edge debugging with AutoRewrite PREPASS
 const handleDebugRuleFromLink = (link: any) => {
   if (!link) return;
@@ -910,6 +935,47 @@ const handleDebugRuleFromLink = (link: any) => {
     return () => clearTimeout(timeout);
   }, [currentView, project]);
 
+  // ------------------------------------------------------
+// ⭐ NEW: Compute per-edge rule status (ok | autofix | error)
+useEffect(() => {
+  if (!project?.flow?.logic) {
+    setEdgeStatusByLinkId({});
+    return;
+  }
+
+  const next: Record<string, 'ok' | 'autofix' | 'error'> = {};
+
+  for (const link of project.flow.logic) {
+    const expression = link.condition || String(link.label || 'true');
+
+    try {
+      const context = buildAutoContextForExpression(expression);
+      const knownFields = buildKnownFieldsFromContext(context);
+
+      const rewrite = autoRewriteExpression(expression, knownFields);
+      if (rewrite && rewrite.rewritten !== rewrite.original) {
+        next[link.id] = 'autofix';
+        continue;
+      }
+
+      try {
+        evaluateConditionWithTrace(expression, context);
+        next[link.id] = 'ok';
+      } catch {
+        next[link.id] = 'error';
+      }
+    } catch {
+      next[link.id] = 'error';
+    }
+  }
+
+  setEdgeStatusByLinkId(next);
+}, [project]);
+
+
+
+
+
   // --- Render Views ---
   const renderContent = () => {
       if (currentView === ViewState.MEMORY) {
@@ -1201,6 +1267,7 @@ const handleDebugRuleFromLink = (link: any) => {
                         // 🆕 Edge selection vanuit de graph
                         selectedLinkId={selectedLogicLinkId}
                         onSelectLink={handleSelectLogicLinkFromGraph}
+                        edgeStatusByLinkId={edgeStatusByLinkId}
                         />
 
                       </div>
@@ -1242,24 +1309,48 @@ const handleDebugRuleFromLink = (link: any) => {
                         {/* Rule Inspector – toont info over de geselecteerde edge */}
                         {selectedLogicLink && (
                             <div className="flex-none">
-                            <RuleInspectorPanel
-                                link={selectedLogicLink as any}
-                                fromAgent={selectedLinkFromAgent as any}
-                                toAgent={selectedLinkToAgent as any}
-                                onClose={() => setSelectedLogicLinkId(null)}
-                                onDebugRule={() => handleDebugRuleFromLink(selectedLogicLink)}
-                            />
+                                <RuleInspectorPanel
+                                    link={selectedLogicLink as any}
+                                    onClose={() => setSelectedLogicLinkId(null)}
+
+                                    // NEW: update the rule in the project when typing or applying autofix
+                                    onUpdateCondition={(newCondition: string) => {
+                                        const updatedLogic = (project.flow.logic || []).map((l: any) =>
+                                            l.id === selectedLogicLink?.id
+                                                ? { ...l, condition: newCondition }
+                                                : l
+                                        );
+
+                                        updateProject({
+                                            ...project,
+                                            flow: {
+                                                ...project.flow,
+                                                logic: updatedLogic,
+                                            },
+                                        });
+                                    }}
+
+                                    // NEW: canonical context for rewrite suggestions
+                                    context={buildAutoContextForExpression(selectedLogicLink?.condition || '')}
+                                    
+                                    // Debug rule (existing)
+                                    onDebugRule={() => handleDebugRuleFromLink(selectedLogicLink)}
+                                />
+
                             </div>
                         )}
 
                         {/* Condition Debugger – toont uitleg waarom TRUE/FALSE */}
                                         {selectedConditionTrace && (
                                         <div className="flex-1 min-h-[260px]">
-                                            <ConditionDebuggerPanel
-                                            trace={selectedConditionTrace}
-                                            onClose={() => setSelectedConditionTrace(null)}
-                                            onApplyRewrite={handleApplyRuleRewrite}
-                                            />
+<ConditionDebuggerPanel
+    trace={selectedConditionTrace}
+    onClose={() => setSelectedConditionTrace(null)}
+    onApplyRewrite={handleApplyRuleRewrite}
+    hideAutoFix={Boolean(selectedLogicLink)} // 👈 HET BELANGRIJKE STUK
+/>
+
+
                                         </div>
                                         )}
 
