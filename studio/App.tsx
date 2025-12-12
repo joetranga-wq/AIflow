@@ -201,14 +201,31 @@ const validationByAgentId = useMemo(() => {
     setCurrentView(ViewState.WORKFLOW);
   };
 
-  const handleHighlightPathFromTrace = (nodes: string[], edges: { from: string; to: string }[]) => {
-    setHighlightedNodeIds(nodes);
-    setHighlightedEdges(edges);
-    if (nodes.length > 0) {
-      setSelectedAgentId(nodes[0]);
-    }
-    setCurrentView(ViewState.WORKFLOW);
-  };
+  const handleFocusAgentFromTrace = (agentId: string) => {
+  setHighlightedNodeIds([agentId]);
+  setHighlightedEdges([]);
+  // ✅ bewust NIET: setCurrentView(...)
+  // We blijven in Debug view, alleen graph state wordt voorbereid.
+};
+
+
+const handleHighlightPathFromTrace = (
+  nodes: string[],
+  edges: { from: string; to: string }[]
+) => {
+  setHighlightedNodeIds(nodes);
+  setHighlightedEdges(edges);
+  // bewust: GEEN view switch, GEEN selection
+};
+
+const handleHighlightPathAndOpenFromTrace = (
+  nodes: string[],
+  edges: { from: string; to: string }[]
+) => {
+  setHighlightedNodeIds(nodes);
+  setHighlightedEdges(edges);
+  setCurrentView(ViewState.WORKFLOW);
+};
 
 
     // 👉 Wanneer een edge (logic link) in de graph wordt aangeklikt
@@ -1531,10 +1548,13 @@ useEffect(() => {
 
       if (currentView === ViewState.DEBUG) {
         return (
-            <DebugTraceView
-              onJumpToAgent={handleJumpToAgentFromTrace}
-              onHighlightPath={handleHighlightPathFromTrace}
-            />
+<DebugTraceView
+  onJumpToAgent={handleJumpToAgentFromTrace}
+  onHighlightPath={handleHighlightPathFromTrace}
+  onHighlightPathAndOpen={handleHighlightPathAndOpenFromTrace}
+  onFocusAgent={handleFocusAgentFromTrace}
+/>
+
         );
       }
 

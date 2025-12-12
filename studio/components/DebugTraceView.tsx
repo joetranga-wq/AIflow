@@ -71,20 +71,28 @@ const computeContextDiff = (
 
 interface DebugTraceViewProps {
   onJumpToAgent?: (agentId: string) => void;
+
+  // C.3.2: highlight nodes + edges without view switch (App decides)
   onHighlightPath?: (nodes: string[], edges: { from: string; to: string }[]) => void;
+
+  // Optional: used by "Highlight full path in Workflow" button to ALSO open workflow
+  onHighlightPathAndOpen?: (nodes: string[], edges: { from: string; to: string }[]) => void;
+
+  // C.3.1 fallback: focus active agent while staying in Debug view
+  onFocusAgent?: (agentId: string) => void;
 }
 
 const DebugTraceView: React.FC<DebugTraceViewProps> = ({
   onJumpToAgent,
   onHighlightPath,
+  onHighlightPathAndOpen,
+  onFocusAgent,
 }) => {
   const [rawJson, setRawJson] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [trace, setTrace] = useState<TraceStep[]>([]);
   const [context, setContext] = useState<Record<string, unknown> | null>(null);
-  const [selectedStepIndex, setSelectedStepIndex] = useState<number | null>(
-    null
-  );
+  const [selectedStepIndex, setSelectedStepIndex] = useState<number | null>(null);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [playSpeed] = useState(1200); // ms per stap
@@ -94,9 +102,7 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [showRoutingOnly, setShowRoutingOnly] = useState(false);
 
-  const [diffModeByStep, setDiffModeByStep] = useState<Record<number, boolean>>(
-    {}
-  );
+  const [diffModeByStep, setDiffModeByStep] = useState<Record<number, boolean>>({});
 
   // Condition Debugger state
   const [isConditionPanelOpen, setIsConditionPanelOpen] = useState(false);
@@ -104,9 +110,7 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
   const [conditionContextJson, setConditionContextJson] = useState('');
   const [conditionResult, setConditionResult] = useState<boolean | null>(null);
   const [conditionError, setConditionError] = useState<string | null>(null);
-  const [conditionSourceStep, setConditionSourceStep] = useState<number | null>(
-    null
-  );
+  const [conditionSourceStep, setConditionSourceStep] = useState<number | null>(null);
 
   const handleParse = () => {
     try {
@@ -153,15 +157,41 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
 
   const renderJson = (value: unknown) => JSON.stringify(value, null, 2);
 
+  const emitHighlightForStep = (step: TraceStep | undefined | null) => {
+    if (!step) return;
+
+    // Prefer combined highlight (nodes + edge) to avoid edges being cleared by onFocusAgent flows.
+    if (onHighlightPath) {
+      const nodes = new Set<string>();
+      const edges: { from: string; to: string }[] = [];
+
+      if (step.agentId) nodes.add(step.agentId);
+      if (step.nextAgentId) {
+        nodes.add(step.nextAgentId);
+        edges.push({ from: step.agentId, to: step.nextAgentId });
+      }
+
+      onHighlightPath(Array.from(nodes), edges);
+      return;
+    }
+
+    // Fallback only
+    if (onFocusAgent && step.agentId) onFocusAgent(step.agentId);
+  };
+
   const handleSelectStep = (index: number) => {
     setSelectedStepIndex(index);
+
+    const step = trace[index];
+    emitHighlightForStep(step);
+
     const el = document.getElementById(`trace-step-${index}`);
     if (el) {
       el.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
   };
 
-  // Auto-play door de stappen
+  // Auto-play door de stappen (alleen index + scroll)
   useEffect(() => {
     if (!isPlaying || trace.length === 0) return;
 
@@ -194,6 +224,14 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
     return () => clearInterval(interval);
   }, [isPlaying, trace.length, playSpeed]);
 
+  // ✅ Keep graph highlight in sync with selected step (also covers autoplay)
+  useEffect(() => {
+    if (selectedStepIndex == null) return;
+    const step = trace[selectedStepIndex];
+    emitHighlightForStep(step);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedStepIndex, trace, onHighlightPath, onFocusAgent]);
+
   const handleTogglePlay = () => {
     if (trace.length === 0) return;
     if (selectedStepIndex === null) {
@@ -217,7 +255,6 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
       context: globalContext,
       output: step.parsedOutput,
       agentId: step.agentId,
-      // optioneel user-veld in context
       user: (globalContext as any).user,
     };
 
@@ -239,24 +276,23 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
     }
 
     try {
-      const ctx = conditionContextJson.trim()
-        ? JSON.parse(conditionContextJson)
-        : {};
+      const ctx = conditionContextJson.trim() ? JSON.parse(conditionContextJson) : {};
       const result = evaluateExpression(conditionExpression, ctx);
       setConditionResult(result);
       setConditionError(null);
     } catch (e: any) {
       console.error(e);
       setConditionError(
-        e?.message ??
-          'Failed to evaluate condition. Check your JSON context and expression.'
+        e?.message ?? 'Failed to evaluate condition. Check your JSON context and expression.'
       );
       setConditionResult(null);
     }
   };
 
+  // "Full path" button: prefers open+highlight handler if present
   const handleHighlightFullPath = () => {
-    if (!onHighlightPath || trace.length === 0) return;
+    const cb = onHighlightPathAndOpen ?? onHighlightPath;
+    if (!cb || trace.length === 0) return;
 
     const nodes = new Set<string>();
     const edges: { from: string; to: string }[] = [];
@@ -269,7 +305,7 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
       }
     });
 
-    onHighlightPath(Array.from(nodes), edges);
+    cb(Array.from(nodes), edges);
   };
 
   // Afgeleide trace op basis van filters
@@ -284,8 +320,7 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
       step.role.toLowerCase().includes(normalizedAgentFilter);
 
     const haystack = JSON.stringify(step).toLowerCase();
-    const matchesSearch =
-      !normalizedSearchTerm || haystack.includes(normalizedSearchTerm);
+    const matchesSearch = !normalizedSearchTerm || haystack.includes(normalizedSearchTerm);
 
     const matchesRouting =
       !showRoutingOnly || (step.selectedRuleId != null && step.selectedRuleId !== '');
@@ -302,20 +337,17 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
             <Bug className="h-5 w-5 text-indigo-600" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">
-              Debug — CLI Trace Viewer
-            </h1>
+            <h1 className="text-2xl font-bold text-slate-900">Debug — CLI Trace Viewer</h1>
             <p className="text-sm text-slate-500">
-              Plak hier de <span className="font-mono">Final context</span> JSON
-              uit de CLI-run om elke stap van je AIFLOW-uitvoering te
-              inspecteren.
+              Plak hier de <span className="font-mono">Final context</span> JSON uit de CLI-run om
+              elke stap van je AIFLOW-uitvoering te inspecteren.
             </p>
           </div>
         </div>
 
         {/* Jump naar Workflow Builder + Highlight path */}
         <div className="flex items-center space-x-2">
-          {onHighlightPath && trace.length > 0 && (
+          {(onHighlightPath || onHighlightPathAndOpen) && trace.length > 0 && (
             <button
               type="button"
               onClick={handleHighlightFullPath}
@@ -344,8 +376,7 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <span className="text-sm font-medium text-slate-700">
-              1. Plak hier de JSON van{' '}
-              <span className="font-mono">Final context:</span>
+              1. Plak hier de JSON van <span className="font-mono">Final context:</span>
             </span>
             <button
               type="button"
@@ -363,9 +394,8 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
             placeholder={`Voorbeeld:\n{\n  "ticket_text": "...",\n  "output_agent1": { ... },\n  "output_agent2": "...",\n  "__trace": [ ... ]\n}`}
           />
           <p className="text-xs text-slate-500">
-            ✅ Tip: kopieer alleen het JSON-blok na{' '}
-            <span className="font-mono">"Final context:"</span> uit de CLI, niet
-            de volledige terminal-output.
+            ✅ Tip: kopieer alleen het JSON-blok na <span className="font-mono">"Final context:"</span>{' '}
+            uit de CLI, niet de volledige terminal-output.
           </p>
           {error && (
             <div className="flex items-start space-x-2 text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs">
@@ -385,16 +415,14 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
             <div className="border border-slate-100 rounded-lg bg-slate-50 max-h-60 overflow-auto">
               <pre className="text-[11px] leading-relaxed text-slate-800 p-3 font-mono whitespace-pre">
                 {renderJson(
-                  Object.fromEntries(
-                    Object.entries(context).filter(([key]) => key !== '__trace')
-                  )
+                  Object.fromEntries(Object.entries(context).filter(([key]) => key !== '__trace'))
                 )}
               </pre>
             </div>
           ) : (
             <p className="text-xs text-slate-500">
-              Nog geen context geladen. Klik op{' '}
-              <strong>Parse trace</strong> nadat je JSON hebt geplakt.
+              Nog geen context geladen. Klik op <strong>Parse trace</strong> nadat je JSON hebt
+              geplakt.
             </p>
           )}
         </div>
@@ -521,25 +549,21 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
         {trace.length === 0 ? (
           <div className="border border-dashed border-slate-300 rounded-xl p-6 text-center text-sm text-slate-500 bg-slate-50">
             Nog geen trace gevonden. Plak de JSON en klik op{' '}
-            <span className="font-medium">Parse trace</span> om de stappen te
-            zien.
+            <span className="font-medium">Parse trace</span> om de stappen te zien.
           </div>
         ) : visibleTrace.length === 0 ? (
           <div className="border border-dashed border-slate-300 rounded-xl p-6 text-center text-sm text-slate-500 bg-slate-50">
-            Geen stappen gevonden voor deze filter/zoekopdracht. Probeer een
-            andere term of maak de filters leeg.
+            Geen stappen gevonden voor deze filter/zoekopdracht. Probeer een andere term of maak
+            de filters leeg.
           </div>
         ) : (
           <div className="space-y-4">
             {visibleTrace.map((step) => {
               const originalIndex = trace.indexOf(step);
-              const matchedRule = step.rulesEvaluated?.find(
-                (r) => r.id === step.selectedRuleId
-              );
+              const matchedRule = step.rulesEvaluated?.find((r) => r.id === step.selectedRuleId);
               const isActive = selectedStepIndex === originalIndex;
 
-              const previousStep =
-                originalIndex > 0 ? trace[originalIndex - 1] : undefined;
+              const previousStep = originalIndex > 0 ? trace[originalIndex - 1] : undefined;
               const previousInput = previousStep
                 ? (previousStep.inputContext as Record<string, unknown>)
                 : undefined;
@@ -547,10 +571,7 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
 
               const contextToRender =
                 isDiffMode && previousInput
-                  ? computeContextDiff(
-                      previousInput,
-                      step.inputContext as Record<string, unknown>
-                    )
+                  ? computeContextDiff(previousInput, step.inputContext as Record<string, unknown>)
                   : step.inputContext;
 
               return (
@@ -565,14 +586,10 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
                     <div className="flex items-center space-x-3">
                       <div
                         className={`h-7 w-7 rounded-lg flex items-center justify-center ${
-                          isActive
-                            ? 'bg-indigo-600 text-white'
-                            : 'bg-indigo-50 text-indigo-700'
+                          isActive ? 'bg-indigo-600 text-white' : 'bg-indigo-50 text-indigo-700'
                         }`}
                       >
-                        <span className="text-xs font-semibold">
-                          {step.step}
-                        </span>
+                        <span className="text-xs font-semibold">{step.step}</span>
                       </div>
                       <div>
                         <div className="flex items-center space-x-2">
@@ -588,9 +605,7 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
                           {step.nextAgentId && (
                             <>
                               <span className="mx-2 text-slate-400">→</span>
-                              <span className="text-slate-600">
-                                Next: {step.nextAgentId}
-                              </span>
+                              <span className="text-slate-600">Next: {step.nextAgentId}</span>
                             </>
                           )}
                         </p>
@@ -609,9 +624,7 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
                         {step.nextAgentId && (
                           <p className="text-[11px] text-slate-500">
                             Route selected →{' '}
-                            <span className="font-mono text-slate-700">
-                              {step.nextAgentId}
-                            </span>
+                            <span className="font-mono text-slate-700">{step.nextAgentId}</span>
                           </p>
                         )}
                       </div>
@@ -622,9 +635,7 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
                     {/* Input context */}
                     <div className="border-r border-slate-100 p-4">
                       <div className="flex items-center justify-between mb-2">
-                        <h3 className="text-xs font-semibold text-slate-700">
-                          Input Context
-                        </h3>
+                        <h3 className="text-xs font-semibold text-slate-700">Input Context</h3>
                         <button
                           type="button"
                           disabled={!previousInput}
@@ -642,9 +653,7 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
                               : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'
                           }`}
                         >
-                          {isDiffMode
-                            ? 'Toon volledige context'
-                            : 'Toon alleen wijzigingen'}
+                          {isDiffMode ? 'Toon volledige context' : 'Toon alleen wijzigingen'}
                         </button>
                       </div>
                       <div className="bg-slate-50 border border-slate-100 rounded-lg max-h-56 overflow-auto">
@@ -656,9 +665,7 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
 
                     {/* Parsed output */}
                     <div className="border-r border-slate-100 p-4">
-                      <h3 className="text-xs font-semibold text-slate-700 mb-2">
-                        Parsed Output
-                      </h3>
+                      <h3 className="text-xs font-semibold text-slate-700 mb-2">Parsed Output</h3>
                       <div className="bg-slate-50 border border-slate-100 rounded-lg max-h-56 overflow-auto">
                         <pre className="text-[11px] leading-relaxed text-slate-800 p-3 font-mono whitespace-pre">
                           {renderJson(step.parsedOutput)}
@@ -668,15 +675,12 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
 
                     {/* Rules */}
                     <div className="p-4">
-                      <h3 className="text-xs font-semibold text-slate-700 mb-2">
-                        Evaluated Rules
-                      </h3>
+                      <h3 className="text-xs font-semibold text-slate-700 mb-2">Evaluated Rules</h3>
                       {step.rulesEvaluated && step.rulesEvaluated.length > 0 ? (
                         <div className="space-y-2 max-h-56 overflow-auto">
                           {step.rulesEvaluated.map((rule) => {
                             const isSelectedRoute =
-                              !!step.selectedRuleId &&
-                              rule.id === step.selectedRuleId;
+                              !!step.selectedRuleId && rule.id === step.selectedRuleId;
 
                             return (
                               <div
@@ -690,9 +694,7 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
                                 <div className="flex items-center justify-between mb-1">
                                   <span className="font-mono">{rule.id}</span>
                                   <div className="flex items-center space-x-1">
-                                    <span className="font-semibold">
-                                      {rule.result ? 'TRUE' : 'FALSE'}
-                                    </span>
+                                    <span className="font-semibold">{rule.result ? 'TRUE' : 'FALSE'}</span>
                                     {isSelectedRoute && (
                                       <span className="px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 text-[10px] font-semibold">
                                         ROUTE SELECTED
@@ -700,12 +702,7 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
                                     )}
                                     <button
                                       type="button"
-                                      onClick={() =>
-                                        handleOpenConditionDebugger(
-                                          rule.condition,
-                                          originalIndex
-                                        )
-                                      }
+                                      onClick={() => handleOpenConditionDebugger(rule.condition, originalIndex)}
                                       className="inline-flex items-center px-1.5 py-0.5 rounded-md border border-slate-300 bg-white text-[10px] text-slate-700 hover:bg-slate-50"
                                       title="Open this condition in the debugger"
                                     >
@@ -717,17 +714,13 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
                                 <p className="font-mono text-[11px] text-slate-700">
                                   {rule.from} → {rule.to}
                                 </p>
-                                <p className="mt-1 italic text-[11px]">
-                                  {rule.condition}
-                                </p>
+                                <p className="mt-1 italic text-[11px]">{rule.condition}</p>
                               </div>
                             );
                           })}
                         </div>
                       ) : (
-                        <p className="text-xs text-slate-500">
-                          Geen regels geëvalueerd voor deze stap.
-                        </p>
+                        <p className="text-xs text-slate-500">Geen regels geëvalueerd voor deze stap.</p>
                       )}
                     </div>
                   </div>
@@ -759,26 +752,22 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
             </div>
 
             <p className="text-xs text-slate-500">
-              Evaluate a condition with the same context that the CLI used for
-              routing. Click <span className="font-mono">Debug</span> on a rule
-              to autofill this panel.
+              Evaluate a condition with the same context that the CLI used for routing. Click{' '}
+              <span className="font-mono">Debug</span> on a rule to autofill this panel.
             </p>
 
             {conditionSourceStep !== null && trace[conditionSourceStep] && (
               <p className="text-[11px] text-slate-500">
                 Source step:{' '}
                 <span className="font-mono text-slate-700">
-                  #{trace[conditionSourceStep].step} ·{' '}
-                  {trace[conditionSourceStep].agentName} (
+                  #{trace[conditionSourceStep].step} · {trace[conditionSourceStep].agentName} (
                   {trace[conditionSourceStep].agentId})
                 </span>
               </p>
             )}
 
             <div className="space-y-1">
-              <label className="text-xs font-medium text-slate-700">
-                Condition expression
-              </label>
+              <label className="text-xs font-medium text-slate-700">Condition expression</label>
               <input
                 type="text"
                 value={conditionExpression}
@@ -819,19 +808,12 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
 
           {/* Rechter paneel: JSON context */}
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 space-y-3">
-            <h3 className="text-sm font-semibold text-slate-800">
-              Evaluation context (JSON)
-            </h3>
+            <h3 className="text-sm font-semibold text-slate-800">Evaluation context (JSON)</h3>
             <p className="text-[11px] text-slate-500">
-              This JSON is passed to{' '}
-              <span className="font-mono">evaluateExpression</span> as the{' '}
-              <span className="font-mono">ctx</span> argument. By default it
-              contains:
-              <span className="font-mono">
-                {' '}
-                {'{ context, output, agentId, user }'}
-              </span>{' '}
-              for the selected step.
+              This JSON is passed to <span className="font-mono">evaluateExpression</span> as the{' '}
+              <span className="font-mono">ctx</span> argument. By default it contains:
+              <span className="font-mono"> {'{ context, output, agentId, user }'}</span> for the
+              selected step.
             </p>
             <textarea
               value={conditionContextJson}
