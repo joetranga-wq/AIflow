@@ -658,33 +658,34 @@ export default function WorkflowGraph({
         </div>
       )}
 
-      {/* ✅ C.3.3 Legend (read-only). Only shows when highlightedEdges exist */}
+{/* ✅ Legend (read-only). Always visible; becomes “active” when a route is highlighted. */}
 <div
   style={{
     position: 'absolute',
     left: 12,
     bottom: 12,
     zIndex: 5,
-    background: 'rgba(255,255,255,0.92)',
+    background: 'rgba(255,255,255,0.90)',
     border: '1px solid #e5e7eb',
-    borderRadius: 10,
+    borderRadius: 12,
     padding: '8px 10px',
-    boxShadow: '0 6px 16px rgba(0,0,0,0.08)',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
     fontSize: 12,
     color: '#111827',
+    lineHeight: 1.25,
     pointerEvents: 'none',
-    opacity: hasActiveRoute ? 1 : 0.65,
+    opacity: hasActiveRoute ? 1 : 0.55,
   }}
 >
-  <div style={{ fontWeight: 700, marginBottom: 6 }}>Legend</div>
+  <div style={{ fontWeight: 600, marginBottom: 6, color: '#111827' }}>Legend</div>
 
-  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, color: '#374151' }}>
     <div style={{ width: 18, height: 3, background: '#2563eb', borderRadius: 2 }} />
     <div>Active route</div>
   </div>
 
-  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-    <div style={{ width: 18, height: 3, background: '#2563eb', opacity: 0.25, borderRadius: 2 }} />
+  <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#374151' }}>
+    <div style={{ width: 18, height: 3, background: '#2563eb', opacity: 0.22, borderRadius: 2 }} />
     <div>Other routes</div>
   </div>
 
@@ -694,6 +695,7 @@ export default function WorkflowGraph({
     </div>
   )}
 </div>
+
 
     </div>
   );
