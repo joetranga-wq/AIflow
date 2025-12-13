@@ -1,141 +1,159 @@
-import React from 'react';
-import { X } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { autoRewriteExpression } from '../runtime/autoRewriteExpression';
 
 interface RuleInspectorPanelProps {
   link: any;
-  fromAgent?: { id: string; name: string } | null;
-  toAgent?: { id: string; name: string } | null;
   onClose?: () => void;
-  onDebugRule?: () => void;
+  onUpdateCondition?: (newCondition: string) => void;
+  context?: any; // debugContext or agent context
 }
 
 export const RuleInspectorPanel: React.FC<RuleInspectorPanelProps> = ({
   link,
-  fromAgent,
-  toAgent,
   onClose,
-  onDebugRule,
+  onUpdateCondition,
+  context = {},
 }) => {
-  if (!link) return null;
+  const [condition, setCondition] = useState(link?.condition || '');
+  const [autoFix, setAutoFix] = useState<any>(null);
 
-  const condition = link.condition || link.label || '(no condition)';
-  const mapping = link.mapping ?? link.map ?? null;
-
-  const renderMapping = () => {
-    if (!mapping) return null;
-
-    let pretty: string;
-    if (typeof mapping === 'string') {
-      pretty = mapping;
-    } else {
-      try {
-        pretty = JSON.stringify(mapping, null, 2);
-      } catch {
-        pretty = String(mapping);
-      }
+  // Flatten context → canonical fields
+  const collectPaths = (obj: any, prefix = ''): string[] => {
+    if (!obj || typeof obj !== 'object') return [];
+    const res: string[] = [];
+    for (const k of Object.keys(obj)) {
+      const full = prefix ? `${prefix}.${k}` : k;
+      res.push(full);
+      res.push(...collectPaths(obj[k], full));
     }
-
-    return (
-      <pre className="mt-1 text-xs bg-slate-50 border border-slate-200 rounded-lg p-2 font-mono text-slate-700 overflow-auto max-h-40">
-        {pretty}
-      </pre>
-    );
+    return res;
   };
 
-  return (
-    <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden flex flex-col h-full">
-      {/* Header */}
-      <div className="px-4 py-2 border-b border-slate-100 flex items-center justify-between">
-        <div className="flex flex-col">
-          <span className="text-[10px] font-semibold tracking-[0.16em] text-slate-400 uppercase">
-            Rule Inspector
-          </span>
-          <span className="text-xs text-slate-500">
-            Edge conditions for this connection
-          </span>
-        </div>
+  // Build KnownFields for rewrite engine
+  const buildKnownFields = (paths: string[]) => {
+    const uniq = Array.from(new Set(paths));
+    return uniq.map((p) => {
+      const isSnake = p.includes('_') && !p.includes('.');
+      const canonical = isSnake ? p.replace(/_/g, '.') : p;
+      const last = canonical.split('.').pop()!;
+      const snake = canonical.replace(/\./g, '_');
+      return {
+        id: canonical,
+        path: canonical,
+        label: canonical,
+        aliases: [canonical, snake, last, p],
+      };
+    });
+  };
 
-        <div className="flex items-center gap-2">
-          {onDebugRule && (
-            <button
-              onClick={onDebugRule}
-              className="px-2 py-1 rounded-full text-[11px] font-medium bg-slate-900 text-slate-50 hover:bg-slate-800 transition-colors"
-            >
-              Debug rule
-            </button>
-          )}
-          {onClose && (
-            <button
-              onClick={onClose}
-              className="p-1 rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
-              title="Close inspector"
-            >
-              <X className="w-3 h-3" />
-            </button>
-          )}
+  // AutoFix PREPASS on rule change
+  useEffect(() => {
+    try {
+      const paths = collectPaths(context || {});
+      const knownFields = buildKnownFields(paths);
+      const rewrite = autoRewriteExpression(condition, knownFields);
+      setAutoFix(rewrite);
+    } catch (err) {
+      console.warn('Inline autofix failed:', err);
+      setAutoFix(null);
+    }
+  }, [condition, context]);
+
+  const applyRewrite = () => {
+    if (!autoFix?.rewritten) return;
+    setCondition(autoFix.rewritten);
+    onUpdateCondition?.(autoFix.rewritten);
+  };
+
+  if (!link) return null;
+
+  return (
+    <div className="bg-white border-l border-slate-200 w-[360px] h-full flex flex-col">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-2 border-b border-slate-200">
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.14em] text-slate-400">
+            Rule Inspector
+          </div>
+          <div className="text-xs font-medium text-slate-700">
+            {link.from} → {link.to}
+          </div>
         </div>
+        {onClose && (
+          <button
+            className="text-slate-400 hover:text-slate-600"
+            onClick={onClose}
+          >
+            ✕
+          </button>
+        )}
       </div>
 
       {/* Body */}
-      <div className="p-4 space-y-3 text-xs text-slate-700 overflow-auto">
-        {/* From → To */}
-        <div className="flex items-center justify-between">
-          <div className="flex flex-col">
-            <span className="text-[10px] uppercase tracking-[0.14em] text-slate-400">
-              From
-            </span>
-            <span className="text-[13px] font-medium text-slate-800">
-              {fromAgent?.name ?? link.from ?? 'Unknown'}
-            </span>
-          </div>
-          <div className="text-[10px] text-slate-400">→</div>
-          <div className="flex flex-col items-end">
-            <span className="text-[10px] uppercase tracking-[0.14em] text-slate-400">
-              To
-            </span>
-            <span className="text-[13px] font-medium text-slate-800">
-              {toAgent?.name ?? link.to ?? 'Unknown'}
-            </span>
-          </div>
-        </div>
-
-        <div className="h-px bg-slate-100 my-1" />
-
-        {/* Condition */}
+      <div className="flex-1 overflow-auto p-4 space-y-4">
+        {/* Rule editor */}
         <div>
-          <div className="text-[10px] uppercase tracking-[0.16em] text-slate-400 mb-1">
-            Rule expression
+          <div className="text-[10px] uppercase tracking-[0.14em] text-slate-400 mb-1">
+            Condition
           </div>
-          <div className="text-[11px] font-mono bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-slate-800 overflow-x-auto">
-            {condition}
-          </div>
+          <textarea
+            value={condition}
+            onChange={(e) => {
+              setCondition(e.target.value);
+              onUpdateCondition?.(e.target.value);
+            }}
+            className="w-full border border-slate-300 rounded-lg px-2 py-1 text-[12px] font-mono text-slate-800 focus:ring-2 focus:ring-indigo-400 outline-none resize-none h-[90px]"
+          />
         </div>
 
-        {/* Description (optioneel) */}
-        {link.description && (
-          <div>
-            <div className="text-[10px] uppercase tracking-[0.16em] text-slate-400 mb-1">
-              Description
+        {/* INLINE AUTOFIX BLOCK */}
+        {autoFix && autoFix.original !== autoFix.rewritten && (
+          <div className="border border-emerald-200 bg-emerald-50 rounded-xl p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="text-[10px] uppercase tracking-[0.14em] text-emerald-700">
+                Auto-fix available
+              </div>
+
+              <button
+                onClick={applyRewrite}
+                className="text-[11px] font-medium bg-emerald-600 text-white px-2.5 py-1 rounded-full hover:bg-emerald-700"
+              >
+                Apply auto-fix
+              </button>
             </div>
-            <p className="text-[11px] text-slate-700">{link.description}</p>
+
+            {/* Original / Rewritten */}
+            <div className="grid grid-cols-1 gap-2 text-[11px] font-mono">
+              <div>
+                <div className="text-[10px] uppercase text-slate-500">
+                  Original
+                </div>
+                <div className="bg-white border border-slate-200 rounded-lg px-2 py-1 line-through decoration-rose-500 break-all">
+                  {autoFix.original}
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase text-slate-500">
+                  Rewritten
+                </div>
+                <div className="bg-white border border-emerald-200 rounded-lg px-2 py-1 break-all">
+                  {autoFix.rewritten}
+                </div>
+              </div>
+            </div>
+
+            {/* Change list */}
+            {autoFix.changes.length > 0 && (
+              <div className="text-[10px] mt-1 text-slate-600">
+                {autoFix.changes.map((c: any, i: number) => (
+                  <div key={i}>
+                    {c.from} → {c.to} ({Math.round(c.score * 100)}%)
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
-
-        {/* Mapping */}
-        {mapping && (
-          <div>
-            <div className="text-[10px] uppercase tracking-[0.16em] text-slate-400 mb-1">
-              Input mapping
-            </div>
-            {renderMapping()}
-          </div>
-        )}
-
-        {/* Meta */}
-        <div className="pt-2 border-t border-slate-100 text-[10px] text-slate-400 flex justify-between">
-          <span>ID: {link.id ?? '–'}</span>
-          <span>Condition debugger preview</span>
-        </div>
       </div>
     </div>
   );

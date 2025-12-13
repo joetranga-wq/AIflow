@@ -9,7 +9,9 @@ interface ConditionDebuggerPanelProps {
   trace: any;
   onClose?: () => void;
   onApplyRewrite?: (rewrittenExpression: string) => void;
+  hideAutoFix?: boolean; // 👈 NIEUW: verberg AutoFix blok (bij open Rule Inspector)
 }
+
 
 // 🔧 Canonical field helpers (C-fix)
 //
@@ -82,7 +84,8 @@ const findFieldSuggestion = (
 
 export const ConditionDebuggerPanel: React.FC<
   ConditionDebuggerPanelProps
-> = ({ trace, onClose, onApplyRewrite }) => {
+> = ({ trace, onClose, onApplyRewrite, hideAutoFix }) => {
+
   if (!trace) return null;
 
   const expression = trace.expression as string;
@@ -280,58 +283,59 @@ export const ConditionDebuggerPanel: React.FC<
           </div>
         </div>
 
-        {/* 🔧 Auto-fix suggestion (C-fix) */}
-        {autoRewrite && autoRewrite.rewritten !== autoRewrite.original && (
-          <div className="mt-2 border border-emerald-200 bg-emerald-50 rounded-xl p-3 space-y-2">
-            <div className="flex items-center justify-between">
-              <div className="text-[10px] uppercase tracking-[0.16em] text-emerald-700">
-                Auto-fix suggestion
-              </div>
-              {onApplyRewrite && (
-                <button
-                  type="button"
-                  onClick={() => onApplyRewrite(autoRewrite.rewritten)}
-                  className="text-[11px] font-medium px-2.5 py-1 rounded-full bg-emerald-600 text-white hover:bg-emerald-700"
-                >
-                  Apply auto-fix
-                </button>
-              )}
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px] font-mono">
-              <div>
-                <div className="text-[10px] uppercase text-slate-500 mb-0.5">
-                  Original
-                </div>
-                <div className="bg-white border border-slate-200 rounded-lg px-2 py-1 overflow-x-auto line-through decoration-rose-500">
-                  {autoRewrite.original}
-                </div>
-              </div>
-              <div>
-                <div className="text-[10px] uppercase text-slate-500 mb-0.5">
-                  Rewritten
-                </div>
-                <div className="bg-white border border-emerald-200 rounded-lg px-2 py-1 overflow-x-auto">
-                  {autoRewrite.rewritten}
-                </div>
-              </div>
-            </div>
-
-            {autoRewrite.changes.length > 0 && (
-              <div className="text-[10px] text-slate-600">
-                {autoRewrite.changes.map((c, idx) => (
-                  <div key={idx}>
-                    <span className="font-mono">{c.from}</span> →{' '}
-                    <span className="font-mono">{c.to}</span>{' '}
-                    <span className="opacity-70">
-                      ({Math.round(c.score * 100)}% match)
-                    </span>
+              {/* 🔧 Auto-fix suggestion (C-fix) */}
+              {!hideAutoFix && autoRewrite && autoRewrite.rewritten !== autoRewrite.original && (
+                <div className="mt-2 border border-emerald-200 bg-emerald-50 rounded-xl p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="text-[10px] uppercase tracking-[0.16em] text-emerald-700">
+                      Auto-fix suggestion
+                    </div>
+                    {onApplyRewrite && (
+                      <button
+                        type="button"
+                        onClick={() => onApplyRewrite(autoRewrite.rewritten)}
+                        className="text-[11px] font-medium px-2.5 py-1 rounded-full bg-emerald-600 text-white hover:bg-emerald-700"
+                      >
+                        Apply auto-fix
+                      </button>
+                    )}
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px] font-mono">
+                    <div>
+                      <div className="text-[10px] uppercase text-slate-500 mb-0.5">
+                        Original
+                      </div>
+                      <div className="bg-white border border-slate-200 rounded-lg px-2 py-1 overflow-x-auto line-through decoration-rose-500">
+                        {autoRewrite.original}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase text-slate-500 mb-0.5">
+                        Rewritten
+                      </div>
+                      <div className="bg-white border border-emerald-200 rounded-lg px-2 py-1 overflow-x-auto">
+                        {autoRewrite.rewritten}
+                      </div>
+                    </div>
+                  </div>
+
+                  {autoRewrite.changes.length > 0 && (
+                    <div className="text-[10px] text-slate-600">
+                      {autoRewrite.changes.map((c, idx) => (
+                        <div key={idx}>
+                          <span className="font-mono">{c.from}</span> →{' '}
+                          <span className="font-mono">{c.to}</span>{' '}
+                          <span className="opacity-70">
+                            ({Math.round(c.score * 100)}% match)
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
 
         {/* Expression with values */}
         {expressionWithValues && (
