@@ -516,6 +516,10 @@ export default function WorkflowGraph({
     return (project?.flow?.logic || []).find((l: any) => (l?.id ?? null) === menu.linkId) ?? null;
   }, [menu, project]);
 
+  // ✅ C.3.3 Legend visibility (only when there is an active highlighted route)
+  const hasActiveRoute = Array.isArray(highlightedEdges) && highlightedEdges.length > 0;
+
+
   return (
     <div
       ref={wrapperRef}
@@ -653,6 +657,44 @@ export default function WorkflowGraph({
           )}
         </div>
       )}
+
+      {/* ✅ C.3.3 Legend (read-only). Only shows when highlightedEdges exist */}
+<div
+  style={{
+    position: 'absolute',
+    left: 12,
+    bottom: 12,
+    zIndex: 5,
+    background: 'rgba(255,255,255,0.92)',
+    border: '1px solid #e5e7eb',
+    borderRadius: 10,
+    padding: '8px 10px',
+    boxShadow: '0 6px 16px rgba(0,0,0,0.08)',
+    fontSize: 12,
+    color: '#111827',
+    pointerEvents: 'none',
+    opacity: hasActiveRoute ? 1 : 0.65,
+  }}
+>
+  <div style={{ fontWeight: 700, marginBottom: 6 }}>Legend</div>
+
+  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+    <div style={{ width: 18, height: 3, background: '#2563eb', borderRadius: 2 }} />
+    <div>Active route</div>
+  </div>
+
+  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+    <div style={{ width: 18, height: 3, background: '#2563eb', opacity: 0.25, borderRadius: 2 }} />
+    <div>Other routes</div>
+  </div>
+
+  {!hasActiveRoute && (
+    <div style={{ marginTop: 6, fontSize: 11, color: '#6b7280' }}>
+      Select a trace step to highlight a route.
+    </div>
+  )}
+</div>
+
     </div>
   );
 }
