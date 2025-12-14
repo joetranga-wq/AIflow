@@ -9,6 +9,8 @@ import {
   Search,
   Code,
   X,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { evaluateExpression } from '../../runtime/core/conditionEngineV2';
 
@@ -20,17 +22,40 @@ type TraceRule = {
   result: boolean;
 };
 
+type AttemptStatus = 'success' | 'error';
+type ErrorClass = 'transient' | 'hard' | 'unknown';
+
+type TraceAttempt = {
+  attempt: number;
+  status: AttemptStatus;
+  model?: string;
+  rawOutput?: string;
+  error?: { message: string; code?: string; status?: string };
+  errorClass?: ErrorClass;
+  shouldRetry?: boolean;
+  retryReason?: string;
+  backoffAppliedMs?: number;
+};
+
 type TraceStep = {
   step: number;
   agentId: string;
   agentName: string;
   role: string;
+
+  // ✅ existing
   inputContext: Record<string, unknown>;
   rawOutput: string;
   parsedOutput: unknown;
   rulesEvaluated?: TraceRule[];
   selectedRuleId?: string | null;
   nextAgentId?: string | null;
+
+  // ✅ runtime robustness additions (optional, backwards compatible)
+  status?: 'success' | 'error';
+  attemptCount?: number;
+  attempts?: TraceAttempt[];
+  error?: { message: string; code?: string; status?: string } | null;
 };
 
 type TracePayload = {
@@ -103,6 +128,10 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
   const [showRoutingOnly, setShowRoutingOnly] = useState(false);
 
   const [diffModeByStep, setDiffModeByStep] = useState<Record<number, boolean>>({});
+
+  // ✅ Attempts UI state
+  const [attemptsExpandedByStep, setAttemptsExpandedByStep] = useState<Record<number, boolean>>({});
+  const [attemptDetailsOpen, setAttemptDetailsOpen] = useState<Record<string, boolean>>({});
 
   // Condition Debugger state
   const [isConditionPanelOpen, setIsConditionPanelOpen] = useState(false);
@@ -308,6 +337,148 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
     cb(Array.from(nodes), edges);
   };
 
+  const badgeBase =
+    'inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border';
+
+  const attemptStatusBadge = (status: AttemptStatus) => {
+    if (status === 'success') return `${badgeBase} bg-emerald-50 text-emerald-700 border-emerald-200`;
+    return `${badgeBase} bg-rose-50 text-rose-700 border-rose-200`;
+  };
+
+  const errorClassBadge = (cls: ErrorClass) => {
+    if (cls === 'transient') return `${badgeBase} bg-amber-50 text-amber-800 border-amber-200`;
+    if (cls === 'hard') return `${badgeBase} bg-slate-100 text-slate-700 border-slate-200`;
+    return `${badgeBase} bg-slate-50 text-slate-600 border-slate-200`;
+  };
+
+  const retryDecisionBadge = (shouldRetry?: boolean) => {
+    if (shouldRetry === true) return `${badgeBase} bg-indigo-50 text-indigo-700 border-indigo-200`;
+    if (shouldRetry === false) return `${badgeBase} bg-slate-50 text-slate-600 border-slate-200`;
+    return `${badgeBase} bg-slate-50 text-slate-600 border-slate-200`;
+  };
+
+  const renderAttemptsPanel = (step: TraceStep, originalIndex: number) => {
+    const attempts = Array.isArray(step.attempts) ? step.attempts : [];
+    if (!attempts.length) return null;
+
+    const attemptCount = step.attemptCount ?? attempts.length;
+    const hasRetry = attemptCount > 1;
+
+    const expanded = !!attemptsExpandedByStep[originalIndex];
+
+    return (
+      <div className="mt-3">
+        <button
+          type="button"
+          onClick={() =>
+            setAttemptsExpandedByStep((prev) => ({
+              ...prev,
+              [originalIndex]: !prev[originalIndex],
+            }))
+          }
+          className="w-full flex items-center justify-between px-3 py-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-50"
+        >
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold text-slate-700">Attempts</span>
+            <span className={`${badgeBase} bg-slate-50 text-slate-700 border-slate-200`}>
+              {attemptCount} attempt{attemptCount === 1 ? '' : 's'}
+            </span>
+            {hasRetry && (
+              <span className={`${badgeBase} bg-indigo-50 text-indigo-700 border-indigo-200`}>
+                retried
+              </span>
+            )}
+          </div>
+          {expanded ? (
+            <ChevronUp className="h-4 w-4 text-slate-500" />
+          ) : (
+            <ChevronDown className="h-4 w-4 text-slate-500" />
+          )}
+        </button>
+
+        {expanded && (
+          <div className="mt-2 border border-slate-100 rounded-lg bg-slate-50 p-3 space-y-2">
+            {attempts.map((a) => {
+              const key = `${originalIndex}:${a.attempt}`;
+              const showDetails = !!attemptDetailsOpen[key];
+
+              const cls: ErrorClass = (a.errorClass as ErrorClass) ?? 'unknown';
+
+              return (
+                <div key={key} className="bg-white border border-slate-200 rounded-lg px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-[11px] font-mono text-slate-700">
+                        attempt {a.attempt}
+                      </span>
+                      <span className={attemptStatusBadge(a.status)}>{a.status}</span>
+                     {a.status === 'error' && (<span className={errorClassBadge(cls)}>{cls}</span>
+                      )}
+
+                      <span className={retryDecisionBadge(a.shouldRetry)}>
+                        {a.shouldRetry ? 'retry' : 'no-retry'}
+                      </span>
+                      {a.retryReason && (
+                        <span className={`${badgeBase} bg-slate-50 text-slate-700 border-slate-200`}>
+                          {a.retryReason}
+                        </span>
+                      )}
+                      {typeof a.backoffAppliedMs === 'number' && (
+                        <span className={`${badgeBase} bg-slate-50 text-slate-600 border-slate-200`}>
+                          backoff {a.backoffAppliedMs}ms
+                        </span>
+                      )}
+                      {a.model && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-mono">
+                          {a.model}
+                        </span>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setAttemptDetailsOpen((prev) => ({
+                          ...prev,
+                          [key]: !prev[key],
+                        }))
+                      }
+                      className="text-[10px] px-2 py-1 rounded-md border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                    >
+                      {showDetails ? 'Hide details' : 'Show details'}
+                    </button>
+                  </div>
+
+                  {showDetails && (
+                    <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2">
+                      <div className="border border-slate-100 rounded-lg bg-slate-50">
+                        <div className="px-2 py-1 text-[10px] font-semibold text-slate-600 border-b border-slate-100">
+                          Error
+                        </div>
+                        <pre className="text-[11px] leading-relaxed text-slate-800 p-2 font-mono whitespace-pre overflow-auto max-h-40">
+                          {renderJson(a.error ?? null)}
+                        </pre>
+                      </div>
+
+                      <div className="border border-slate-100 rounded-lg bg-slate-50">
+                        <div className="px-2 py-1 text-[10px] font-semibold text-slate-600 border-b border-slate-100">
+                          Raw output
+                        </div>
+                        <pre className="text-[11px] leading-relaxed text-slate-800 p-2 font-mono whitespace-pre overflow-auto max-h-40">
+                          {a.rawOutput ? String(a.rawOutput) : '(none)'}
+                        </pre>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   // Afgeleide trace op basis van filters
   const normalizedAgentFilter = agentFilter.trim().toLowerCase();
   const normalizedSearchTerm = searchTerm.trim().toLowerCase();
@@ -414,9 +585,7 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
           {context ? (
             <div className="border border-slate-100 rounded-lg bg-slate-50 max-h-60 overflow-auto">
               <pre className="text-[11px] leading-relaxed text-slate-800 p-3 font-mono whitespace-pre">
-                {renderJson(
-                  Object.fromEntries(Object.entries(context).filter(([key]) => key !== '__trace'))
-                )}
+                {renderJson(Object.fromEntries(Object.entries(context).filter(([key]) => key !== '__trace')))}
               </pre>
             </div>
           ) : (
@@ -532,12 +701,8 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
                       <span className="text-[10px] uppercase tracking-wide opacity-75 mb-0.5">
                         Step {step.step}
                       </span>
-                      <span className="font-semibold truncate max-w-[120px]">
-                        {step.agentName}
-                      </span>
-                      <span className="text-[10px] mt-0.5 opacity-80">
-                        {step.role}
-                      </span>
+                      <span className="font-semibold truncate max-w-[120px]">{step.agentName}</span>
+                      <span className="text-[10px] mt-0.5 opacity-80">{step.role}</span>
                     </button>
                   </React.Fragment>
                 );
@@ -553,8 +718,8 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
           </div>
         ) : visibleTrace.length === 0 ? (
           <div className="border border-dashed border-slate-300 rounded-xl p-6 text-center text-sm text-slate-500 bg-slate-50">
-            Geen stappen gevonden voor deze filter/zoekopdracht. Probeer een andere term of maak
-            de filters leeg.
+            Geen stappen gevonden voor deze filter/zoekopdracht. Probeer een andere term of maak de
+            filters leeg.
           </div>
         ) : (
           <div className="space-y-4">
@@ -574,6 +739,10 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
                   ? computeContextDiff(previousInput, step.inputContext as Record<string, unknown>)
                   : step.inputContext;
 
+              const attempts = Array.isArray(step.attempts) ? step.attempts : [];
+              const attemptCount = step.attemptCount ?? attempts.length;
+              const hasRetry = attemptCount > 1;
+
               return (
                 <div
                   key={step.step}
@@ -592,13 +761,33 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
                         <span className="text-xs font-semibold">{step.step}</span>
                       </div>
                       <div>
-                        <div className="flex items-center space-x-2">
-                          <span className="text-sm font-semibold text-slate-900">
-                            {step.agentName}
-                          </span>
+                        <div className="flex items-center space-x-2 flex-wrap">
+                          <span className="text-sm font-semibold text-slate-900">{step.agentName}</span>
                           <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-mono">
                             {step.role}
                           </span>
+
+                          {attempts.length > 0 && (
+                            <span className={`${badgeBase} bg-slate-50 text-slate-700 border-slate-200`}>
+                              {attemptCount} attempt{attemptCount === 1 ? '' : 's'}
+                            </span>
+                          )}
+                          {hasRetry && (
+                            <span className={`${badgeBase} bg-indigo-50 text-indigo-700 border-indigo-200`}>
+                              retried
+                            </span>
+                          )}
+                          {step.status && (
+                            <span
+                              className={
+                                step.status === 'success'
+                                  ? `${badgeBase} bg-emerald-50 text-emerald-700 border-emerald-200`
+                                  : `${badgeBase} bg-rose-50 text-rose-700 border-rose-200`
+                              }
+                            >
+                              {step.status}
+                            </span>
+                          )}
                         </div>
                         <p className="text-xs text-slate-500 font-mono">
                           {step.agentId}
@@ -671,6 +860,9 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
                           {renderJson(step.parsedOutput)}
                         </pre>
                       </div>
+
+                      {/* ✅ Attempts panel (collapse/expand) */}
+                      {renderAttemptsPanel(step, originalIndex)}
                     </div>
 
                     {/* Rules */}
@@ -702,7 +894,9 @@ const DebugTraceView: React.FC<DebugTraceViewProps> = ({
                                     )}
                                     <button
                                       type="button"
-                                      onClick={() => handleOpenConditionDebugger(rule.condition, originalIndex)}
+                                      onClick={() =>
+                                        handleOpenConditionDebugger(rule.condition, originalIndex)
+                                      }
                                       className="inline-flex items-center px-1.5 py-0.5 rounded-md border border-slate-300 bg-white text-[10px] text-slate-700 hover:bg-slate-50"
                                       title="Open this condition in the debugger"
                                     >
