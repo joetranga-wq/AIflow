@@ -39,36 +39,50 @@ function cloneJsonSafe<T>(obj: T): T {
   }
 }
 
-// ✅ Retry helpers (A: retries als sub-attempts binnen dezelfde agent step)
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+// -----------------------------
+// Retry / Error classification
+// -----------------------------
+type ErrorClass = "transient" | "hard" | "unknown";
+
+// v1: deterministic — no real waiting/jitter yet
+function backoffMs(_attempt: number) {
+  return 0;
 }
 
-function isRetryableLLMError(err: any): boolean {
-  const msg = String(err?.message ?? err ?? "");
-  const code = String(err?.code ?? "");
+function classifyLLMError(err: any): ErrorClass {
+  const msg = String(err?.message ?? err ?? "").toLowerCase();
+  const code = String(err?.code ?? "").toLowerCase();
   const status = String(err?.status ?? err?.response?.status ?? "");
 
-  // Rate limit / quota / transient
-  if (status === "429" || msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED"))
-    return true;
-  if (status === "503" || msg.includes("503") || msg.includes("UNAVAILABLE"))
-    return true;
-  if (msg.toLowerCase().includes("timeout")) return true;
-  if (msg.toLowerCase().includes("fetch failed")) return true;
-  if (code.toLowerCase().includes("etimedout") || code.toLowerCase().includes("econnreset"))
-    return true;
+  // transient
+  if (status === "429" || msg.includes("429") || msg.includes("resource_exhausted"))
+    return "transient";
+  if (status === "503" || msg.includes("503") || msg.includes("unavailable")) return "transient";
+  if (msg.includes("timeout")) return "transient";
+  if (msg.includes("fetch failed")) return "transient";
+  if (code.includes("etimedout") || code.includes("econnreset")) return "transient";
 
-  return false;
+  // hard (config/auth/request)
+  if (status === "400" || status === "401" || status === "403") return "hard";
+
+  return "unknown";
 }
 
-function backoffMs(attempt: number) {
-  // attempt: 1,2,3...
-  const base = Number(process.env.AIFLOW_LLM_RETRY_BASE_MS ?? "500"); // 500ms default
-  const cap = Number(process.env.AIFLOW_LLM_RETRY_CAP_MS ?? "5000"); // 5s cap
-  const exp = Math.min(cap, base * Math.pow(2, attempt - 1));
-  const jitter = Math.floor(Math.random() * 150); // small jitter
-  return exp + jitter;
+function shouldRetryFromClass(params: {
+  errorClass: ErrorClass;
+  attempt: number;
+  maxAttempts: number;
+}): { shouldRetry: boolean; retryReason: string } {
+  const { errorClass, attempt, maxAttempts } = params;
+
+  const hasMoreAttempts = attempt < maxAttempts;
+  if (!hasMoreAttempts) return { shouldRetry: false, retryReason: "max_attempts_reached" };
+
+  if (errorClass === "transient") return { shouldRetry: true, retryReason: "transient_error" };
+  if (errorClass === "hard") return { shouldRetry: false, retryReason: "hard_error" };
+
+  // unknown: conservative default = no retry (can relax later)
+  return { shouldRetry: false, retryReason: "unknown_error_no_retry" };
 }
 
 // Haal API-key uit env (CLI-omgeving)
@@ -170,16 +184,12 @@ async function run() {
 
   // ✅ Bepaal start-agent: flow.entry_agent is de bron (fallback naar flow.start)
   let currentAgentId: string | null =
-    (project.flow && project.flow.entry_agent) ||
-    (project.flow && project.flow.start) ||
-    null;
+    (project.flow && project.flow.entry_agent) || (project.flow && project.flow.start) || null;
 
   // In de huidige spec is agents een ARRAY
   const agentsArray: any[] = Array.isArray(project.agents) ? project.agents : [];
 
-  const logicRules: any[] = Array.isArray(project.flow?.logic)
-    ? project.flow.logic
-    : [];
+  const logicRules: any[] = Array.isArray(project.flow?.logic) ? project.flow.logic : [];
 
   const toolsRegistry: Record<string, any> = project.tools || {};
 
@@ -224,17 +234,18 @@ Respond in ${agent.output_format || "text"}.
     let parsed: any;
 
     // Retry metadata (sub-attempts binnen dezelfde agent step)
-    const maxAttempts = Math.max(
-      1,
-      Number(process.env.AIFLOW_LLM_MAX_ATTEMPTS ?? "2") // default: 2 attempts
-    );
+    const maxAttempts = Math.max(1, Number(process.env.AIFLOW_LLM_MAX_ATTEMPTS ?? "2"));
 
     const attempts: Array<{
       attempt: number;
       status: "success" | "error";
       model?: string;
-      error?: { message: string; code?: string; status?: string };
       rawOutput?: string;
+      error?: { message: string; code?: string; status?: string };
+      errorClass?: ErrorClass;
+      shouldRetry?: boolean;
+      retryReason?: string;
+      backoffAppliedMs?: number;
     }> = [];
 
     let status: "success" | "error" = "success";
@@ -245,7 +256,17 @@ Respond in ${agent.output_format || "text"}.
       const mock = getMockOutput(currentAgentId, context);
       rawOutput = "```json\n" + JSON.stringify(mock, null, 2) + "\n```";
       parsed = mock;
-      attempts.push({ attempt: 1, status: "success", model: "mock", rawOutput });
+
+      attempts.push({
+        attempt: 1,
+        status: "success",
+        model: "mock",
+        rawOutput,
+        shouldRetry: false,
+        retryReason: "success",
+        backoffAppliedMs: 0,
+      });
+
       console.log("\n[MOCK MODE] Skipping real LLM call.");
     } else {
       // 🌐 Echte Gemini-call (met retries)
@@ -255,25 +276,32 @@ Respond in ${agent.output_format || "text"}.
       parsed = null;
 
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-  try {
-    // 🔧 Local deterministic retry test (do NOT push)
-    // If AIFLOW_FORCE_FIRST_ATTEMPT_FAIL=1, we throw once on attempt 1 per agent step.
-    if (attempt === 1 && process.env.AIFLOW_FORCE_FIRST_ATTEMPT_FAIL === "1") {
-      throw Object.assign(new Error("FORCED_RETRY_TEST: simulated transient error"), {
-        status: 429,
-      });
-    }
+        try {
+          // 🧪 Test/demo: force first attempt to fail when AIFLOW_FORCE_FIRST_ATTEMPT_FAIL=1
+          if (attempt === 1 && process.env.AIFLOW_FORCE_FIRST_ATTEMPT_FAIL === "1") {
+            throw Object.assign(new Error("FORCED_RETRY_TEST: simulated transient error"), {
+              status: 429,
+            });
+          }
 
-    const response = await ai!.models.generateContent({
-      model: modelName,
-      contents: fullPrompt,
-    });
-
+          const response = await ai!.models.generateContent({
+            model: modelName,
+            contents: fullPrompt,
+          });
 
           rawOutput = (response as any).text ?? "";
           parsed = tryParseJson(rawOutput);
 
-          attempts.push({ attempt, status: "success", model: modelName, rawOutput });
+          attempts.push({
+            attempt,
+            status: "success",
+            model: modelName,
+            rawOutput,
+            shouldRetry: false,
+            retryReason: "success",
+            backoffAppliedMs: 0,
+          });
+
           status = "success";
           lastErr = null;
           break;
@@ -285,29 +313,32 @@ Respond in ${agent.output_format || "text"}.
           const code = String(err?.code ?? "");
           const st = String(err?.status ?? err?.response?.status ?? "");
 
+          const errorClass = classifyLLMError(err);
+          const decision = shouldRetryFromClass({ errorClass, attempt, maxAttempts });
+          const backoffAppliedMs = decision.shouldRetry ? backoffMs(attempt) : 0;
+
           attempts.push({
             attempt,
             status: "error",
             model: modelName,
             error: { message: msg, code: code || undefined, status: st || undefined },
+            errorClass,
+            shouldRetry: decision.shouldRetry,
+            retryReason: decision.retryReason,
+            backoffAppliedMs,
           });
 
-          const retryable = isRetryableLLMError(err);
-          const hasMoreAttempts = attempt < maxAttempts;
-
-          if (!retryable || !hasMoreAttempts) {
+          if (!decision.shouldRetry) {
             // Final failure: keep rawOutput as structured JSON string for visibility
             rawOutput = `{"__error":"LLM_CALL_FAILED","message":${JSON.stringify(
               msg
-            )},"code":${JSON.stringify(code || null)},"status":${JSON.stringify(
-              st || null
-            )}}`;
+            )},"code":${JSON.stringify(code || null)},"status":${JSON.stringify(st || null)}}`;
             parsed = tryParseJson(rawOutput);
             break;
           }
 
-          // backoff then retry
-          await sleep(backoffMs(attempt));
+          // v1: deterministic — no waiting (we only record backoffAppliedMs)
+          // continue loop
         }
       }
     }
@@ -324,11 +355,7 @@ Respond in ${agent.output_format || "text"}.
     const agentTools: string[] = Array.isArray(agent.tools) ? agent.tools : [];
     let toolResults: Record<string, any> = {};
 
-    if (
-      agentTools.length > 0 &&
-      toolsRegistry &&
-      Object.keys(toolsRegistry).length > 0
-    ) {
+    if (agentTools.length > 0 && toolsRegistry && Object.keys(toolsRegistry).length > 0) {
       try {
         const toolExec = await runToolsForAgent({
           agentId: currentAgentId,
@@ -343,10 +370,7 @@ Respond in ${agent.output_format || "text"}.
         Object.assign(context, toolExec.updatedContext);
         toolResults = toolExec.toolResults;
       } catch (err) {
-        console.warn(
-          `⚠️ Tool execution failed for agent '${currentAgentId}':`,
-          err
-        );
+        console.warn(`⚠️ Tool execution failed for agent '${currentAgentId}':`, err);
       }
     }
 
@@ -431,9 +455,7 @@ Respond in ${agent.output_format || "text"}.
     }
 
     console.log(
-      `\n→ Transition: ${currentAgentId} -> ${nextRule.to} (rule: ${
-        nextRule.id ?? "unnamed"
-      })`
+      `\n→ Transition: ${currentAgentId} -> ${nextRule.to} (rule: ${nextRule.id ?? "unnamed"})`
     );
     currentAgentId = nextRule.to;
     steps++;
