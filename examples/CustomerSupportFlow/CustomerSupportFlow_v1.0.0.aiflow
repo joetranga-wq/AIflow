@@ -55,7 +55,7 @@
       "retryPolicy": {
         "maxAttempts": 2,
         "retryOn": [
-          "transient"
+          "t"timeout", "network", "rate_limit""
         ]
       },
       "model": {
@@ -78,7 +78,7 @@
       "retryPolicy": {
         "maxAttempts": 3,
         "retryOn": [
-          "transient"
+          ""timeout", "network", "rate_limit""
         ]
       },
       "model": {

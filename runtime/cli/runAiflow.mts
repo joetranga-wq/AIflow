@@ -6,25 +6,64 @@ import { validateProject, hasValidationErrors } from "../core/validator.ts";
 import { evaluateExpression } from "../core/conditionEngineV2.ts";
 import { runToolsForAgent } from "../core/toolsRuntime.mts";
 
-// 🧪 Mock-modus: als deze env var op "1" staat, slaan we echte LLM-calls over
 const MOCK_LLM = process.env.AIFLOW_MOCK_LLM === "1";
 
-// Kleine helper om ```json ... ``` naar echte JSON te parsen
+// If set: disables actual sleeping (still records intended backoffAppliedMs)
+const DISABLE_SLEEP_BACKOFF = process.env.AIFLOW_DISABLE_SLEEP_BACKOFF === "1";
+
+// Cap sleep to avoid very long pauses (still deterministic)
+const BACKOFF_CAP_MS = Number(process.env.AIFLOW_BACKOFF_CAP_MS ?? "60000"); // 60s default
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Parse output naar JSON als het kan.
+ * - support direct JSON
+ * - support prose + ```json ... ``` fenced blocks (neemt de LAATSTE json block)
+ */
 export function tryParseJson(text: string): any {
   if (!text) return text;
+  const raw = String(text);
 
-  // Strip code fences ```json ... ```
-  const cleaned = text
+  // 1) direct JSON
+  try {
+    return JSON.parse(raw);
+  } catch {
+    // continue
+  }
+
+  // 2) extract LAST fenced ```json ... ```
+  const fenceRegex = /```json\s*([\s\S]*?)\s*```/gi;
+  let match: RegExpExecArray | null = null;
+  let lastJsonBlock: string | null = null;
+
+  while ((match = fenceRegex.exec(raw)) !== null) {
+    lastJsonBlock = match[1];
+  }
+
+  if (lastJsonBlock) {
+    const cleaned = lastJsonBlock.trim();
+    try {
+      return JSON.parse(cleaned);
+    } catch {
+      // fallthrough
+    }
+  }
+
+  // 3) backwards-compat: strip generic fences
+  const cleanedGeneric = raw
     .trim()
     .replace(/^```json/i, "")
-    .replace(/^```/, "")
-    .replace(/```$/, "")
+    .replace(/^```/i, "")
+    .replace(/```$/i, "")
     .trim();
 
   try {
-    return JSON.parse(cleaned);
+    return JSON.parse(cleanedGeneric);
   } catch {
-    return text; // geen geldige JSON → gewoon de originele tekst bewaren
+    return raw;
   }
 }
 
@@ -33,25 +72,19 @@ function cloneJsonSafe<T>(obj: T): T {
   try {
     return JSON.parse(JSON.stringify(obj));
   } catch {
-    // Fallback: shallow copy (liever dit dan crashen)
     if (obj && typeof obj === "object") return { ...(obj as any) };
     return obj;
   }
 }
 
 // -----------------------------
-// Retry / Error classification
+// Retry / Error classification (v2 + backoff support)
 // -----------------------------
 type ErrorClass = "transient" | "hard" | "unknown";
+type ErrorCode = "timeout" | "rate_limit" | "network";
+type RetryOnItem = ErrorClass | ErrorCode;
 
-type RetryPolicy = {
-  maxAttempts?: number;
-  // v1: policy spreekt in errorClass-termen (geen status codes)
-  retryOn?: Array<ErrorClass>;
-};
-
-function resolveRetryPolicy(agent: any): { maxAttempts: number; retryOn: Array<ErrorClass> } {
-  // global default blijft env-based (backwards compatible)
+function resolveRetryPolicy(agent: any): { maxAttempts: number; retryOn: Array<RetryOnItem> } {
   const envMax = Number(process.env.AIFLOW_LLM_MAX_ATTEMPTS ?? "2");
   const agentMaxRaw = agent?.retryPolicy?.maxAttempts;
 
@@ -62,114 +95,347 @@ function resolveRetryPolicy(agent: any): { maxAttempts: number; retryOn: Array<E
   );
 
   const retryOnRaw = agent?.retryPolicy?.retryOn;
-  const retryOn: Array<ErrorClass> = Array.isArray(retryOnRaw)
-    ? retryOnRaw.filter((x: any) => x === "transient" || x === "hard" || x === "unknown")
-    : ["transient"]; // default policy: retry only transient
+
+  const allowed: Array<RetryOnItem> = [
+    "transient",
+    "hard",
+    "unknown",
+    "timeout",
+    "rate_limit",
+    "network",
+  ];
+
+  const retryOn: Array<RetryOnItem> = Array.isArray(retryOnRaw)
+    ? retryOnRaw.filter((x: any) => allowed.includes(x))
+    : ["transient"];
 
   return { maxAttempts, retryOn };
 }
 
-// v1: deterministic — no real waiting/jitter yet
-function backoffMs(_attempt: number) {
-  return 0;
-}
-
-function classifyLLMError(err: any): ErrorClass {
+export function classifyLLMErrorV2(err: any): { errorClass: ErrorClass; errorCode?: ErrorCode } {
   const msg = String(err?.message ?? err ?? "").toLowerCase();
   const code = String(err?.code ?? "").toLowerCase();
   const status = String(err?.status ?? err?.response?.status ?? "");
 
-  // transient
-  if (status === "429" || msg.includes("429") || msg.includes("resource_exhausted"))
-    return "transient";
-  if (status === "503" || msg.includes("503") || msg.includes("unavailable")) return "transient";
-  if (msg.includes("timeout")) return "transient";
-  if (msg.includes("fetch failed")) return "transient";
-  if (code.includes("etimedout") || code.includes("econnreset")) return "transient";
+  // hard
+  if (status === "400" || status === "401" || status === "403") {
+    return { errorClass: "hard" };
+  }
 
-  // hard (config/auth/request)
-  if (status === "400" || status === "401" || status === "403") return "hard";
-
-  return "unknown";
+  // rate limit / quota
+if (status === "429" || msg.includes("429") || msg.includes("resource_exhausted")) {
+  // Daily quota exceeded is NOT meaningfully retryable (waiting doesn't help)
+  if (
+    msg.includes("requests per day") ||
+    msg.includes("quota exceeded for metric") ||
+    msg.includes("perday") ||
+    msg.includes("generaterequestsperday")
+  ) {
+    return { errorClass: "hard", errorCode: "rate_limit" };
+  }
+  return { errorClass: "transient", errorCode: "rate_limit" };
 }
 
-function shouldRetryFromPolicy(params: {
+
+  // timeout
+  if (msg.includes("timeout")) return { errorClass: "transient", errorCode: "timeout" };
+  if (code.includes("etimedout")) return { errorClass: "transient", errorCode: "timeout" };
+
+  // network/unavailable
+  if (status === "503" || msg.includes("503") || msg.includes("unavailable")) {
+    return { errorClass: "transient", errorCode: "network" };
+  }
+  if (msg.includes("fetch failed")) return { errorClass: "transient", errorCode: "network" };
+  if (code.includes("econnreset")) return { errorClass: "transient", errorCode: "network" };
+
+  return { errorClass: "unknown" };
+}
+
+export function shouldRetryFromPolicyV2(params: {
   errorClass: ErrorClass;
+  errorCode?: ErrorCode;
   attempt: number;
   maxAttempts: number;
-  retryOn: Array<ErrorClass>;
+  retryOn: Array<RetryOnItem>;
 }): { shouldRetry: boolean; retryReason: string } {
-  const { errorClass, attempt, maxAttempts, retryOn } = params;
+  const { errorClass, errorCode, attempt, maxAttempts, retryOn } = params;
 
   const hasMoreAttempts = attempt < maxAttempts;
   if (!hasMoreAttempts) return { shouldRetry: false, retryReason: "max_attempts_reached" };
 
-  // hard errors: never retry (policy cannot override this in v1)
   if (errorClass === "hard") return { shouldRetry: false, retryReason: "hard_error" };
 
-  const allowed = retryOn.includes(errorClass);
+  // Prefer exact code match
+  if (errorCode && retryOn.includes(errorCode)) {
+    return { shouldRetry: true, retryReason: `policy_match:${errorCode}` };
+  }
 
-  if (allowed) return { shouldRetry: true, retryReason: `policy_retry_${errorClass}` };
-  return { shouldRetry: false, retryReason: `policy_no_retry_${errorClass}` };
+  // Fallback transient
+  if (errorClass === "transient" && retryOn.includes("transient")) {
+    return { shouldRetry: true, retryReason: "policy_match:transient" };
+  }
+
+  return { shouldRetry: false, retryReason: `policy_no_match:${errorCode ?? errorClass}` };
 }
 
-// Haal API-key uit env (CLI-omgeving)
-// In MOCK_LLM-mode gebruiken we geen echte calls, maar laten we de check staan
-const API_KEY = process.env.API_KEY || process.env.GEMINI_API_KEY;
+/**
+ * Extract retry delay from Gemini error payload if present.
+ * Handles:
+ * - err.message containing JSON string with google.rpc.RetryInfo { retryDelay: "38s" }
+ * - err.message containing "Please retry in 38.148s"
+ */
+function extractRetryDelayMs(err: any): number | null {
+  const rawMsg = String(err?.message ?? "");
 
+  // 1) If message itself is JSON (Gemini often returns JSON string)
+  try {
+    const maybe = JSON.parse(rawMsg);
+    const details = maybe?.error?.details;
+    if (Array.isArray(details)) {
+      for (const d of details) {
+        const retryDelay = d?.retryDelay;
+        if (typeof retryDelay === "string") {
+          // "38s" or "38.148352784s"
+          const m = retryDelay.match(/^(\d+(\.\d+)?)s$/);
+          if (m) return Math.round(Number(m[1]) * 1000);
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  // 2) Plain text fallback: "Please retry in 38.148352784s."
+  const m2 = rawMsg.match(/retry in\s+(\d+(\.\d+)?)s/i);
+  if (m2) return Math.round(Number(m2[1]) * 1000);
+
+  return null;
+}
+
+function computeBackoffMs(params: { attempt: number; errorCode?: ErrorCode; err?: any }): number {
+  // Deterministic rules:
+  // - If rate_limit: honor server-provided retryDelay if present (capped)
+  // - Else: 0 (no jitter/no sleep) - can be extended later
+  const { errorCode, err } = params;
+  if (errorCode === "rate_limit") {
+    const d = extractRetryDelayMs(err);
+    if (typeof d === "number" && Number.isFinite(d) && d > 0) {
+      return Math.min(d, BACKOFF_CAP_MS);
+    }
+    // fallback deterministic 1s if 429 without delay
+    return Math.min(1000, BACKOFF_CAP_MS);
+  }
+  return 0;
+}
+
+// -----------------------------
+// Tool directives (v4 - as previously)
+// -----------------------------
+type ToolDirective = {
+  toolName: string;
+  input: Record<string, any>;
+  source: "tool_name" | "tool_code";
+  raw?: string;
+};
+
+function splitToolStatements(toolCode: string): string[] {
+  return String(toolCode ?? "")
+    .split(/\r?\n|;/g)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function parseToolCodeToDirective(toolCodeStatement: string): ToolDirective | null {
+  const s = String(toolCodeStatement ?? "").trim();
+  if (!s) return null;
+
+  const fnMatch =
+    s.match(/print\s*\(\s*([a-zA-Z_]\w*)\s*\(/) ?? s.match(/^([a-zA-Z_]\w*)\s*\(/);
+
+  const toolName = fnMatch?.[1];
+  if (!toolName) return null;
+
+  const callStart = s.indexOf(`${toolName}(`);
+  if (callStart < 0) return { toolName, input: {}, source: "tool_code", raw: s };
+
+  const argsStart = callStart + toolName.length + 1;
+
+  let depth = 1;
+  let i = argsStart;
+  for (; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === "(") depth++;
+    else if (ch === ")") {
+      depth--;
+      if (depth === 0) break;
+    }
+  }
+
+  const argsRaw = i > argsStart ? s.slice(argsStart, i).trim() : "";
+  const input: Record<string, any> = {};
+  if (!argsRaw) return { toolName, input, source: "tool_code", raw: s };
+
+  const parts: string[] = [];
+  let buf = "";
+  let d = 0;
+  let inStr: '"' | "'" | null = null;
+
+  for (let k = 0; k < argsRaw.length; k++) {
+    const c = argsRaw[k];
+
+    if (inStr) {
+      buf += c;
+      if (c === inStr && argsRaw[k - 1] !== "\\") inStr = null;
+      continue;
+    }
+
+    if (c === '"' || c === "'") {
+      inStr = c;
+      buf += c;
+      continue;
+    }
+
+    if (c === "(") d++;
+    if (c === ")") d--;
+
+    if (c === "," && d === 0) {
+      parts.push(buf.trim());
+      buf = "";
+      continue;
+    }
+
+    buf += c;
+  }
+  if (buf.trim()) parts.push(buf.trim());
+
+  for (const p of parts) {
+    const m = p.match(/^([a-zA-Z_]\w*)\s*=\s*(.+)$/);
+    if (!m) continue;
+
+    const key = m[1];
+    const valRaw = m[2].trim();
+
+    const strM = valRaw.match(/^"(.*)"$/) || valRaw.match(/^'(.*)'$/);
+    if (strM) {
+      input[key] = strM[1].replace(/\\"/g, '"').replace(/\\'/g, "'");
+      continue;
+    }
+
+    if (valRaw === "true" || valRaw === "True") {
+      input[key] = true;
+      continue;
+    }
+    if (valRaw === "false" || valRaw === "False") {
+      input[key] = false;
+      continue;
+    }
+
+    if (/^-?\d+(\.\d+)?$/.test(valRaw)) {
+      input[key] = Number(valRaw);
+      continue;
+    }
+
+    input[key] = valRaw;
+  }
+
+  return { toolName, input, source: "tool_code", raw: s };
+}
+
+function extractToolDirectives(parsed: any): ToolDirective[] {
+  if (!parsed || typeof parsed !== "object") return [];
+
+  const explicitName = String(
+    (parsed as any).tool_name ?? (parsed as any).toolName ?? (parsed as any).tool ?? ""
+  ).trim();
+
+  if (explicitName) {
+    const params =
+      (parsed as any).parameters ?? (parsed as any).params ?? (parsed as any).input ?? {};
+    const input = params && typeof params === "object" ? params : {};
+    return [{ toolName: explicitName, input, source: "tool_name" }];
+  }
+
+  const toolCode = (parsed as any).tool_code ?? (parsed as any).toolCode;
+  const directives: ToolDirective[] = [];
+
+  if (typeof toolCode === "string" && toolCode.trim().length > 0) {
+    const statements = splitToolStatements(toolCode);
+    for (const st of statements) {
+      const d = parseToolCodeToDirective(st);
+      if (d) directives.push(d);
+    }
+  } else if (Array.isArray(toolCode)) {
+    for (const item of toolCode) {
+      if (typeof item !== "string") continue;
+      const statements = splitToolStatements(item);
+      for (const st of statements) {
+        const d = parseToolCodeToDirective(st);
+        if (d) directives.push(d);
+      }
+    }
+  }
+
+  const seen = new Set<string>();
+  const uniq: ToolDirective[] = [];
+  for (const d of directives) {
+    const key = `${d.toolName}::${JSON.stringify(d.input)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    uniq.push(d);
+  }
+
+  return uniq;
+}
+
+async function runDirectiveTools(params: {
+  agentId: string;
+  directives: ToolDirective[];
+  whitelist: string[];
+  registry: Record<string, any>;
+  context: Record<string, any>;
+  globalApiKey?: string;
+}): Promise<{ toolResults: Record<string, any>; updatedContext: Record<string, any> }> {
+  const { agentId, directives, whitelist, registry, context, globalApiKey } = params;
+
+  const toolResults: Record<string, any> = {};
+  let updatedContext = { ...context };
+
+  const allowedDirectives = directives.filter((d) => whitelist.includes(d.toolName));
+  if (allowedDirectives.length === 0) return { toolResults, updatedContext };
+
+  for (const d of allowedDirectives) {
+    try {
+      const exec = await runToolsForAgent({
+        agentId,
+        agentTools: [d.toolName],
+        registry,
+        context: { ...updatedContext },
+        parsedOutput: d.input,
+        globalApiKey,
+      });
+
+      Object.assign(updatedContext, exec.updatedContext);
+      const maybe = exec.toolResults?.[d.toolName];
+      toolResults[d.toolName] = maybe ?? exec.toolResults ?? { ok: true };
+    } catch (err) {
+      toolResults[d.toolName] = {
+        ok: false,
+        status: null,
+        error: String((err as any)?.message ?? err ?? "Tool execution failed"),
+      };
+    }
+  }
+
+  return { toolResults, updatedContext };
+}
+
+// API key
+const API_KEY = process.env.API_KEY || process.env.GEMINI_API_KEY;
 if (!API_KEY && !MOCK_LLM) {
   console.error(
     "❌ No API key set. Please set API_KEY or GEMINI_API_KEY in your environment, or use AIFLOW_MOCK_LLM=1."
   );
   process.exit(1);
-}
-
-// 🔁 Mock output generator op basis van agentId
-function getMockOutput(agentId: string, context: Record<string, any>): any {
-  switch (agentId) {
-    // CustomerSupportFlow
-    case "triage":
-      return {
-        needs_human: false,
-        category: "mock_category",
-      };
-    case "automated_resolution":
-      return {
-        resolved: true,
-        message: "Mock automated resolution successful.",
-      };
-
-    // LeadQualificationFlow
-    case "agent_qualifier":
-      return {
-        fit_score: 80,
-        reason: "Mock: fits ICP.",
-      };
-
-    // MarketingContentFlow
-    case "agent_strategist":
-      return {
-        approved: true,
-        strategy: "Mock strategy plan",
-      };
-    case "agent_social":
-      return {
-        posts: [
-          { channel: "twitter", text: "Mock tweet 1" },
-          { channel: "twitter", text: "Mock tweet 2" },
-          { channel: "twitter", text: "Mock tweet 3" },
-          { channel: "linkedin", text: "Mock LinkedIn post" },
-        ],
-      };
-
-    // Default: géén volledige contextSnapshot meer → voorkomt circular refs
-    default:
-      return {
-        mock: true,
-        agentId,
-        note: "Default mock output.",
-      };
-  }
 }
 
 async function run() {
@@ -183,7 +449,6 @@ async function run() {
   const raw = readFileSync(filePath, "utf-8");
   const project: any = JSON.parse(raw);
 
-  // ✅ v0.2: Valideer het ingeladen .aiflow-project met de nieuwe validator
   const issues = validateProject(project);
   if (hasValidationErrors(issues)) {
     console.error("Invalid AIFLOW file:");
@@ -196,29 +461,18 @@ async function run() {
     process.exit(1);
   }
 
-  console.log(
-    `▶ Running AIFLOW project: ${project.metadata?.name} v${project.metadata?.version}`
-  );
+  console.log(`▶ Running AIFLOW project: ${project.metadata?.name} v${project.metadata?.version}`);
 
   const ai = !MOCK_LLM ? new GoogleGenAI({ apiKey: API_KEY! }) : null;
 
-  // Globale context (flow.variables + latere outputs)
-  const context: Record<string, any> = {
-    ...(project.flow?.variables || {}),
-  };
-
-  // Trace-structuur om alle stappen vast te leggen
+  const context: Record<string, any> = { ...(project.flow?.variables || {}) };
   const trace: any[] = [];
 
-  // ✅ Bepaal start-agent: flow.entry_agent is de bron (fallback naar flow.start)
   let currentAgentId: string | null =
     (project.flow && project.flow.entry_agent) || (project.flow && project.flow.start) || null;
 
-  // In de huidige spec is agents een ARRAY
   const agentsArray: any[] = Array.isArray(project.agents) ? project.agents : [];
-
   const logicRules: any[] = Array.isArray(project.flow?.logic) ? project.flow.logic : [];
-
   const toolsRegistry: Record<string, any> = project.tools || {};
 
   let steps = 0;
@@ -234,7 +488,6 @@ async function run() {
 
     console.log(`\n=== Agent: ${agent.name ?? currentAgentId} (${agent.role}) ===`);
 
-    // ✅ Snapshot BEFORE this step runs (truthful inputContext)
     const inputContextSnapshot = cloneJsonSafe(context);
     const startedAt = Date.now();
 
@@ -261,7 +514,6 @@ Respond in ${agent.output_format || "text"}.
     let rawOutput: string;
     let parsed: any;
 
-    // Retry metadata (sub-attempts binnen dezelfde agent step)
     const resolvedRetryPolicy = resolveRetryPolicy(agent);
     const maxAttempts = resolvedRetryPolicy.maxAttempts;
     const retryOn = resolvedRetryPolicy.retryOn;
@@ -273,6 +525,7 @@ Respond in ${agent.output_format || "text"}.
       rawOutput?: string;
       error?: { message: string; code?: string; status?: string };
       errorClass?: ErrorClass;
+      errorCode?: ErrorCode;
       shouldRetry?: boolean;
       retryReason?: string;
       backoffAppliedMs?: number;
@@ -282,10 +535,8 @@ Respond in ${agent.output_format || "text"}.
     let lastErr: any = null;
 
     if (MOCK_LLM) {
-      // 🧪 Geen echte call: gebruik mock output
-      const mock = getMockOutput(currentAgentId, context);
-      rawOutput = "```json\n" + JSON.stringify(mock, null, 2) + "\n```";
-      parsed = mock;
+      rawOutput = "```json\n" + JSON.stringify({ mock: true }, null, 2) + "\n```";
+      parsed = tryParseJson(rawOutput);
 
       attempts.push({
         attempt: 1,
@@ -299,7 +550,6 @@ Respond in ${agent.output_format || "text"}.
 
       console.log("\n[MOCK MODE] Skipping real LLM call.");
     } else {
-      // 🌐 Echte Gemini-call (met retries)
       const modelName = "gemini-2.5-flash";
 
       rawOutput = "";
@@ -307,7 +557,7 @@ Respond in ${agent.output_format || "text"}.
 
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         try {
-          // 🧪 Test/demo: force first attempt to fail when AIFLOW_FORCE_FIRST_ATTEMPT_FAIL=1
+          // test helper
           if (attempt === 1 && process.env.AIFLOW_FORCE_FIRST_ATTEMPT_FAIL === "1") {
             throw Object.assign(new Error("FORCED_RETRY_TEST: simulated transient error"), {
               status: 429,
@@ -343,23 +593,32 @@ Respond in ${agent.output_format || "text"}.
           const code = String(err?.code ?? "");
           const st = String(err?.status ?? err?.response?.status ?? "");
 
-          const errorClass = classifyLLMError(err);
-          const decision = shouldRetryFromPolicy({ errorClass, attempt, maxAttempts, retryOn });
-          const backoffAppliedMs = decision.shouldRetry ? backoffMs(attempt) : 0;
+          const classified = classifyLLMErrorV2(err);
+          const decision = shouldRetryFromPolicyV2({
+            errorClass: classified.errorClass,
+            errorCode: classified.errorCode,
+            attempt,
+            maxAttempts,
+            retryOn,
+          });
+
+          const backoffAppliedMs = decision.shouldRetry
+            ? computeBackoffMs({ attempt, errorCode: classified.errorCode, err })
+            : 0;
 
           attempts.push({
             attempt,
             status: "error",
             model: modelName,
             error: { message: msg, code: code || undefined, status: st || undefined },
-            errorClass,
+            errorClass: classified.errorClass,
+            errorCode: classified.errorCode,
             shouldRetry: decision.shouldRetry,
             retryReason: decision.retryReason,
             backoffAppliedMs,
           });
 
           if (!decision.shouldRetry) {
-            // Final failure: keep rawOutput as structured JSON string for visibility
             rawOutput = `{"__error":"LLM_CALL_FAILED","message":${JSON.stringify(
               msg
             )},"code":${JSON.stringify(code || null)},"status":${JSON.stringify(st || null)}}`;
@@ -367,8 +626,10 @@ Respond in ${agent.output_format || "text"}.
             break;
           }
 
-          // v1: deterministic — no waiting (we only record backoffAppliedMs)
-          // continue loop
+          // ✅ Deterministic backoff (honor RetryInfo)
+          if (backoffAppliedMs > 0 && !DISABLE_SLEEP_BACKOFF) {
+            await sleep(backoffAppliedMs);
+          }
         }
       }
     }
@@ -378,33 +639,36 @@ Respond in ${agent.output_format || "text"}.
     console.log("\nRaw Output:\n" + rawOutput);
     console.log("\nParsed Output:", parsed);
 
-    // Sla output op in de context onder deze agent-id
     context[`output_${currentAgentId}`] = parsed;
 
-    // 🧩 Tools Runtime integratie (optioneel per agent)
-    const agentTools: string[] = Array.isArray(agent.tools) ? agent.tools : [];
+    // -----------------------------
+    // Tools execution (STRICT + directives-aware)
+    // -----------------------------
+    const agentToolsWhitelist: string[] = Array.isArray(agent.tools) ? agent.tools : [];
     let toolResults: Record<string, any> = {};
 
-    if (agentTools.length > 0 && toolsRegistry && Object.keys(toolsRegistry).length > 0) {
-      try {
-        const toolExec = await runToolsForAgent({
+    const directives = extractToolDirectives(parsed);
+
+    if (directives.length > 0) {
+      if (toolsRegistry && Object.keys(toolsRegistry).length > 0) {
+        const exec = await runDirectiveTools({
           agentId: currentAgentId,
-          agentTools,
+          directives,
+          whitelist: agentToolsWhitelist,
           registry: toolsRegistry,
-          context: { ...context },
-          parsedOutput: parsed,
+          context,
           globalApiKey: API_KEY,
         });
-
-        // Context updaten met toolresultaten
-        Object.assign(context, toolExec.updatedContext);
-        toolResults = toolExec.toolResults;
-      } catch (err) {
-        console.warn(`⚠️ Tool execution failed for agent '${currentAgentId}':`, err);
+        toolResults = exec.toolResults;
+        Object.assign(context, exec.updatedContext);
+      } else {
+        toolResults = {};
       }
+    } else {
+      toolResults = {};
     }
 
-    // ✅ v0.2 Expression-based routing met nieuwe condition engine
+    // ✅ Routing (condition engine)
     const rulesForAgent = logicRules.filter((rule) => rule.from === currentAgentId);
 
     const ruleResults: {
@@ -417,7 +681,6 @@ Respond in ${agent.output_format || "text"}.
 
     let nextRule: any | null = null;
 
-    // Zelfde eval-context als in runFlow v0.2
     const evalContext = {
       context,
       output: parsed,
@@ -441,21 +704,18 @@ Respond in ${agent.output_format || "text"}.
         result,
       });
 
-      if (!nextRule && result) {
-        nextRule = rule;
-      }
+      if (!nextRule && result) nextRule = rule;
     }
 
-    // ✅ Trace entry maken voor deze stap (incl. tools + retries metadata)
     trace.push({
       step: steps,
       agentId: currentAgentId,
       agentName: agent.name ?? currentAgentId,
       role: agent.role,
-      inputContext: inputContextSnapshot, // ✅ truthful pre-step snapshot
+      inputContext: inputContextSnapshot,
       startedAt,
       finishedAt,
-      status, // "success" | "error"
+      status,
       attemptCount: attempts.length,
       attempts,
       retryPolicy: resolvedRetryPolicy,
@@ -473,6 +733,7 @@ Respond in ${agent.output_format || "text"}.
           : null,
       rawOutput,
       parsedOutput: parsed,
+      toolDirectives: directives,
       tools: toolResults,
       rulesEvaluated: ruleResults,
       selectedRuleId: nextRule?.id ?? null,
@@ -492,14 +753,12 @@ Respond in ${agent.output_format || "text"}.
     steps++;
   }
 
-  // ✅ Trace aan de context toevoegen voor debugging / Studio
   context.__trace = trace;
 
   console.log("\n🏁 Flow finished. Final context:");
   console.log(JSON.stringify(context, null, 2));
 }
 
-// Alleen de CLI daadwerkelijk starten als we NIET onder Vitest draaien
 if (!process.env.VITEST) {
   run().catch((err) => {
     console.error("Unexpected error while running flow:", err);
