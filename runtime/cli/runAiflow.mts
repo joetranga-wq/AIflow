@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { createHash } from "node:crypto";
 import { GoogleGenAI } from "@google/genai";
 import { validateProject, hasValidationErrors } from "../core/validator.ts";
 import { evaluateExpression } from "../core/conditionEngineV2.ts";
@@ -23,6 +24,78 @@ const BACKOFF_CAP_MS = Number(process.env.AIFLOW_BACKOFF_CAP_MS ?? "60000"); // 
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+// ✅ NEW: deterministic timestamps for sim mode
+function nowMsDeterministic(isSim: boolean): number {
+  return isSim ? 0 : Date.now();
+}
+
+// -----------------------------
+// Simulation helpers (deterministic, seed-based, no network)
+// -----------------------------
+function hashToInt(input: string): number {
+  const h = createHash("sha256").update(input).digest("hex").slice(0, 8);
+  return parseInt(h, 16);
+}
+
+function stablePick<T>(arr: T[], n: number): T {
+  return arr[n % arr.length];
+}
+
+function classifyTicketType(ticketText: string): "technical" | "billing" | "general" {
+  const t = String(ticketText ?? "").toLowerCase();
+
+  // Controlled, minimal heuristics (no scope creep)
+  if (t.includes("500") || t.includes("error") || t.includes("fout") || t.includes("inloggen")) {
+    return "technical";
+  }
+  if (t.includes("factuur") || t.includes("betaling") || t.includes("invoice") || t.includes("refund")) {
+    return "billing";
+  }
+  return "general";
+}
+
+function simulateParsedOutput(params: {
+  agentId: string;
+  agentName?: string;
+  role?: string;
+  outputFormat?: string;
+  contextSnapshot: Record<string, any>;
+  seed: number;
+}): any {
+  const { agentId, agentName, role, outputFormat, contextSnapshot, seed } = params;
+
+  const base = `${seed}::${agentId}::${JSON.stringify(contextSnapshot)}`;
+  const x = hashToInt(base);
+
+  const fmt = String(outputFormat ?? "text").toLowerCase();
+
+  if (fmt === "json") {
+    const looksLikeClassifier =
+      String(role ?? "").toLowerCase().includes("classifier") ||
+      String(agentName ?? "").toLowerCase().includes("triage");
+
+    if (looksLikeClassifier) {
+      const tt = classifyTicketType(contextSnapshot.ticket_text);
+      return {
+        simulated: true,
+        ticket_type: tt,
+        signature: `sim-${seed}-${agentId}-${x}`,
+      };
+    }
+
+    return {
+      simulated: true,
+      agentId,
+      agentName: agentName ?? agentId,
+      role: role ?? "Agent",
+      decision: stablePick(["A", "B", "C", "D"], x),
+      signature: `sim-${seed}-${agentId}-${x}`,
+    };
+  }
+
+  return `SIMULATED_OUTPUT(${agentId}) seed=${seed} sig=${x}`;
 }
 
 /**
@@ -129,10 +202,8 @@ export function classifyLLMErrorV2(err: any): { errorClass: ErrorClass; errorCod
     return { errorClass: "hard" };
   }
 
-  // rate limit / quota
-  // transient
+  // transient: rate limits
   if (status === "429" || msg.includes("429") || msg.includes("resource_exhausted")) {
-    // Daily quota exhausted is NOT meaningfully retryable → treat as hard stop
     if (
       msg.includes("requests per day") ||
       msg.includes("quota exceeded for metric") ||
@@ -141,8 +212,6 @@ export function classifyLLMErrorV2(err: any): { errorClass: ErrorClass; errorCod
     ) {
       return { errorClass: "hard", errorCode: "rate_limit" };
     }
-
-    // burst/normal rate limit → retryable
     return { errorClass: "transient", errorCode: "rate_limit" };
   }
 
@@ -174,12 +243,10 @@ export function shouldRetryFromPolicyV2(params: {
 
   if (errorClass === "hard") return { shouldRetry: false, retryReason: "hard_error" };
 
-  // Prefer exact code match
   if (errorCode && retryOn.includes(errorCode)) {
     return { shouldRetry: true, retryReason: `policy_match:${errorCode}` };
   }
 
-  // Fallback transient
   if (errorClass === "transient" && retryOn.includes("transient")) {
     return { shouldRetry: true, retryReason: "policy_match:transient" };
   }
@@ -187,16 +254,9 @@ export function shouldRetryFromPolicyV2(params: {
   return { shouldRetry: false, retryReason: `policy_no_match:${errorCode ?? errorClass}` };
 }
 
-/**
- * Extract retry delay from Gemini error payload if present.
- * Handles:
- * - err.message containing JSON string with google.rpc.RetryInfo { retryDelay: "38s" }
- * - err.message containing "Please retry in 38.148s"
- */
 function extractRetryDelayMs(err: any): number | null {
   const rawMsg = String(err?.message ?? "");
 
-  // 1) If message itself is JSON (Gemini often returns JSON string)
   try {
     const maybe = JSON.parse(rawMsg);
     const details = maybe?.error?.details;
@@ -204,7 +264,6 @@ function extractRetryDelayMs(err: any): number | null {
       for (const d of details) {
         const retryDelay = d?.retryDelay;
         if (typeof retryDelay === "string") {
-          // "38s" or "38.148352784s"
           const m = retryDelay.match(/^(\d+(\.\d+)?)s$/);
           if (m) return Math.round(Number(m[1]) * 1000);
         }
@@ -214,7 +273,6 @@ function extractRetryDelayMs(err: any): number | null {
     // ignore
   }
 
-  // 2) Plain text fallback: "Please retry in 38.148352784s."
   const m2 = rawMsg.match(/retry in\s+(\d+(\.\d+)?)s/i);
   if (m2) return Math.round(Number(m2[1]) * 1000);
 
@@ -222,23 +280,19 @@ function extractRetryDelayMs(err: any): number | null {
 }
 
 function computeBackoffMs(params: { attempt: number; errorCode?: ErrorCode; err?: any }): number {
-  // Deterministic rules:
-  // - If rate_limit: honor server-provided retryDelay if present (capped)
-  // - Else: 0 (no jitter/no sleep) - can be extended later
   const { errorCode, err } = params;
   if (errorCode === "rate_limit") {
     const d = extractRetryDelayMs(err);
     if (typeof d === "number" && Number.isFinite(d) && d > 0) {
       return Math.min(d, BACKOFF_CAP_MS);
     }
-    // fallback deterministic 1s if 429 without delay
     return Math.min(1000, BACKOFF_CAP_MS);
   }
   return 0;
 }
 
 // -----------------------------
-// Tool directives (v4 - as previously)
+// Tool directives (v4)
 // -----------------------------
 type ToolDirective = {
   toolName: string;
@@ -498,7 +552,9 @@ async function run() {
     console.log(`\n=== Agent: ${agent.name ?? currentAgentId} (${agent.role}) ===`);
 
     const inputContextSnapshot = cloneJsonSafe(context);
-    const startedAt = Date.now();
+
+    // ✅ CHANGED: deterministic timestamps in sim mode
+    const startedAt = nowMsDeterministic(MOCK_LLM);
 
     const prompts = project.prompts || {};
     const promptTemplate =
@@ -544,20 +600,35 @@ Respond in ${agent.output_format || "text"}.
     let lastErr: any = null;
 
     if (MOCK_LLM) {
-      rawOutput = "```json\n" + JSON.stringify({ mock: true }, null, 2) + "\n```";
-      parsed = tryParseJson(rawOutput);
+      const seed = Number(process.env.AIFLOW_SEED ?? "0");
+
+      const simulatedParsed = simulateParsedOutput({
+        agentId: currentAgentId,
+        agentName: agent.name ?? currentAgentId,
+        role: agent.role,
+        outputFormat: agent.output_format,
+        contextSnapshot: inputContextSnapshot,
+        seed,
+      });
+
+      rawOutput =
+        typeof simulatedParsed === "string"
+          ? simulatedParsed
+          : "```json\n" + JSON.stringify(simulatedParsed, null, 2) + "\n```";
+
+      parsed = typeof simulatedParsed === "string" ? simulatedParsed : tryParseJson(rawOutput);
 
       attempts.push({
         attempt: 1,
         status: "success",
-        model: "mock",
+        model: "sim",
         rawOutput,
         shouldRetry: false,
         retryReason: "success",
         backoffAppliedMs: 0,
       });
 
-      console.log("\n[MOCK MODE] Skipping real LLM call.");
+      console.log("\n[SIM MODE] Deterministic simulated output (no network).");
     } else {
       const modelName = "gemini-2.5-flash";
 
@@ -635,7 +706,6 @@ Respond in ${agent.output_format || "text"}.
             break;
           }
 
-          // ✅ Deterministic backoff (honor RetryInfo)
           if (backoffAppliedMs > 0 && !DISABLE_SLEEP_BACKOFF) {
             await sleep(backoffAppliedMs);
           }
@@ -643,7 +713,8 @@ Respond in ${agent.output_format || "text"}.
       }
     }
 
-    const finishedAt = Date.now();
+    // ✅ CHANGED: deterministic timestamps in sim mode
+    const finishedAt = nowMsDeterministic(MOCK_LLM);
 
     console.log("\nRaw Output:\n" + rawOutput);
     console.log("\nParsed Output:", parsed);
