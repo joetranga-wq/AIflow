@@ -26,7 +26,7 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// ✅ NEW: deterministic timestamps for sim mode
+// deterministic timestamps for sim mode
 function nowMsDeterministic(isSim: boolean): number {
   return isSim ? 0 : Date.now();
 }
@@ -50,10 +50,23 @@ function classifyTicketType(ticketText: string): "technical" | "billing" | "gene
   if (t.includes("500") || t.includes("error") || t.includes("fout") || t.includes("inloggen")) {
     return "technical";
   }
-  if (t.includes("factuur") || t.includes("betaling") || t.includes("invoice") || t.includes("refund")) {
+  if (
+    t.includes("factuur") ||
+    t.includes("betaling") ||
+    t.includes("invoice") ||
+    t.includes("refund")
+  ) {
     return "billing";
   }
   return "general";
+}
+
+function parseBoolEnv(v: string | undefined): boolean | null {
+  if (v === undefined) return null;
+  const s = String(v).trim().toLowerCase();
+  if (s === "1" || s === "true" || s === "yes" || s === "y") return true;
+  if (s === "0" || s === "false" || s === "no" || s === "n") return false;
+  return null;
 }
 
 function simulateParsedOutput(params: {
@@ -77,13 +90,25 @@ function simulateParsedOutput(params: {
       String(agentName ?? "").toLowerCase().includes("triage");
 
     if (looksLikeClassifier) {
-      const tt = classifyTicketType(contextSnapshot.ticket_text);
+      // Optional override: force ticket_type to hit specific routing paths
+      const overrideTypeRaw = process.env.AIFLOW_SIM_TICKET_TYPE;
+      const overrideType = overrideTypeRaw ? String(overrideTypeRaw).trim().toLowerCase() : null;
+
+      const tt =
+        overrideType === "technical" || overrideType === "billing" || overrideType === "general"
+          ? (overrideType as any)
+          : classifyTicketType(contextSnapshot.ticket_text);
+
       return {
         simulated: true,
         ticket_type: tt,
         signature: `sim-${seed}-${agentId}-${x}`,
+        __sim_override: overrideType ? { ticket_type: tt } : undefined,
       };
     }
+
+    // Optional override: force solution_found to hit routing rules like output.solution_found == true
+    const sol = parseBoolEnv(process.env.AIFLOW_SIM_SOLUTION_FOUND);
 
     return {
       simulated: true,
@@ -91,7 +116,9 @@ function simulateParsedOutput(params: {
       agentName: agentName ?? agentId,
       role: role ?? "Agent",
       decision: stablePick(["A", "B", "C", "D"], x),
+      ...(sol === null ? {} : { solution_found: sol }),
       signature: `sim-${seed}-${agentId}-${x}`,
+      __sim_override: sol === null ? undefined : { solution_found: sol },
     };
   }
 
@@ -147,7 +174,7 @@ export function tryParseJson(text: string): any {
   }
 }
 
-// ✅ Safe snapshot helper (truthful inputContext, voorkomt mutation-leaks)
+// Safe snapshot helper (truthful inputContext, voorkomt mutation-leaks)
 function cloneJsonSafe<T>(obj: T): T {
   try {
     return JSON.parse(JSON.stringify(obj));
@@ -553,7 +580,6 @@ async function run() {
 
     const inputContextSnapshot = cloneJsonSafe(context);
 
-    // ✅ CHANGED: deterministic timestamps in sim mode
     const startedAt = nowMsDeterministic(MOCK_LLM);
 
     const prompts = project.prompts || {};
@@ -713,7 +739,6 @@ Respond in ${agent.output_format || "text"}.
       }
     }
 
-    // ✅ CHANGED: deterministic timestamps in sim mode
     const finishedAt = nowMsDeterministic(MOCK_LLM);
 
     console.log("\nRaw Output:\n" + rawOutput);
@@ -748,7 +773,7 @@ Respond in ${agent.output_format || "text"}.
       toolResults = {};
     }
 
-    // ✅ Routing (condition engine)
+    // Routing (condition engine)
     const rulesForAgent = logicRules.filter((rule) => rule.from === currentAgentId);
 
     const ruleResults: {
