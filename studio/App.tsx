@@ -71,7 +71,10 @@ const App: React.FC = () => {
       { id: getStableSessionId(INITIAL_PROJECT.metadata.name), history: [INITIAL_PROJECT], historyIndex: 0, lastModified: new Date() },
       { id: getStableSessionId(MARKETING_PROJECT.metadata.name), history: [MARKETING_PROJECT], historyIndex: 0, lastModified: new Date(Date.now() - 86400000) }
   ]);
-  const [activeSessionId, setActiveSessionId] = useState<string>(INITIAL_PROJECT.metadata.name);
+const [activeSessionId, setActiveSessionId] = useState<string>(
+  getStableSessionId(INITIAL_PROJECT.metadata.name)
+);
+
   const [globalApiKey, setGlobalApiKey] = useState("");
   
   // Execution
@@ -97,13 +100,18 @@ const App: React.FC = () => {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [selectedConditionTrace, setSelectedConditionTrace] = useState<any | null>(null);
   const [selectedLogicLinkId, setSelectedLogicLinkId] = useState<string | null>(null);
-  const [editingLink, setEditingLink] = useState<{id: string, condition: string, mapping?: string} | null>(null);
+  const [editingLink, setEditingLink] = useState<{
+    id: string;
+    condition: string;
+    mapping?: string;
+    decisionOwner?: 'ai' | 'human';
+  } | null>(null);
   const [highlightedNodeIds, setHighlightedNodeIds] = useState<string[]>([]);
   const [highlightedEdges, setHighlightedEdges] = useState<{ from: string; to: string }[]>([]);
 
-  // NEW: Edge status (ok | autofix | error)
+  // NEW: Edge status (ok | autofix | error | missing_owner)
   const [edgeStatusByLinkId, setEdgeStatusByLinkId] = useState<
-    Record<string, 'ok' | 'autofix' | 'error'>
+    Record<string, 'ok' | 'autofix' | 'error' | 'missing_owner'>
   >({});
 
   const [isLinkingMode, setIsLinkingMode] = useState(false);
@@ -325,6 +333,7 @@ const App: React.FC = () => {
 
     const expression = link.condition || String(link.label || "true");
 
+
     // Always jump to workflow view
     setCurrentView(ViewState.WORKFLOW);
 
@@ -373,6 +382,7 @@ const App: React.FC = () => {
         // Deliver rewrite result directly to debugger
         setSelectedConditionTrace({
           conditionId: link.id || "edge",
+          edgeStatus: edgeStatusByLinkId[link.id],
           runId: "design-preview",
           expression: rewrite.original,
           rewrittenExpression: rewrite.rewritten,
@@ -422,6 +432,7 @@ const App: React.FC = () => {
     setSelectedConditionTrace({
       ...trace,
       debugContext: context,
+      edgeStatus: edgeStatusByLinkId[link.id],
     });
   };
 
@@ -458,6 +469,36 @@ const App: React.FC = () => {
       expressionWithValues: rewrittenExpression,
     });
   };
+
+  // ✅ Decision owner quick-set (used by Debugger + Rule Inspector)
+  const setDecisionOwnerForLink = (linkId: string, decisionOwner: 'ai' | 'human') => {
+    if (!linkId) return;
+
+    const updatedLogic = (project.flow.logic || []).map((l: any) => {
+      if (l.id === linkId) {
+        return { ...l, decisionOwner };
+      }
+      return l;
+    });
+
+    updateProject({
+      ...project,
+      flow: {
+        ...project.flow,
+        logic: updatedLogic,
+      },
+    });
+
+    // If the debugger is open for this link, clear the missing-owner banner immediately.
+    if ((selectedConditionTrace as any)?.conditionId === linkId) {
+      setSelectedConditionTrace({
+        ...(selectedConditionTrace as any),
+        missingOwner: false,
+        edgeStatus: 'ok',
+      });
+    }
+  };
+
 
   // --- Helpers ---
   const updateProject = (newProject: AIFlowProject, transient = false) => {
@@ -648,7 +689,8 @@ const App: React.FC = () => {
       };
 
       setSessions(prev => [...prev, newSession]);
-      setActiveSessionId(name);
+      setActiveSessionId(newSession.id);
+
       setIsDirty(false);
       setCurrentView(ViewState.WORKFLOW);
   };
@@ -770,11 +812,16 @@ const App: React.FC = () => {
         executionStatus: 'idle'
     };
     
-    updateProject({
-        ...project,
-        agents: [...project.agents, newAgent],
-        flow: { ...project.flow, agents: [...project.flow.agents, id] }
-    });
+updateProject({
+  ...project,
+  agents: [...project.agents, newAgent],
+  flow: {
+    ...project.flow,
+    agents: [...project.flow.agents, id],
+    entry_agent: project.flow.entry_agent ?? id, // 👈 CRUCIAAL
+  },
+});
+
   };
 
   const handleAddToolNode = () => {
@@ -836,6 +883,7 @@ const App: React.FC = () => {
           ...l,
           condition: editingLink.condition,
           mapping: parsedMapping,
+          decisionOwner: editingLink.decisionOwner,
         };
       }
       return l;
@@ -984,39 +1032,52 @@ const App: React.FC = () => {
     return () => clearTimeout(timeout);
   }, [currentView, project]);
 
-  // ------------------------------------------------------
-  // ⭐ NEW: Compute per-edge rule status (ok | autofix | error)
+// ------------------------------------------------------
+  // ⭐ NEW: Compute per-edge rule status (ok | autofix | error | missing_owner)
   useEffect(() => {
     if (!project?.flow?.logic) {
       setEdgeStatusByLinkId({});
       return;
     }
 
-    const next: Record<string, 'ok' | 'autofix' | 'error'> = {};
+    const next: Record<string, 'ok' | 'autofix' | 'error' | 'missing_owner'> = {};
 
-    for (const link of project.flow.logic) {
-      const expression = link.condition || String((link as any).label || 'true');
+ for (const link of project.flow.logic as any[]) {
+  const expression = link.condition || String(link.label || 'true');
 
-      try {
-        const context = buildAutoContextForExpression(expression);
-        const knownFields = buildKnownFieldsFromContext(context);
+  const isDecisionPoint =
+    typeof expression === 'string' &&
+    expression.trim() !== '' &&
+    expression.trim().toLowerCase() !== 'always';
 
-        const rewrite = autoRewriteExpression(expression, knownFields);
-        if (rewrite && rewrite.rewritten !== rewrite.original) {
-          next[link.id] = 'autofix';
-          continue;
-        }
+  try {
+    const context = buildAutoContextForExpression(expression);
+    const knownFields = buildKnownFieldsFromContext(context);
 
-        try {
-          evaluateConditionWithTrace(expression, context);
-          next[link.id] = 'ok';
-        } catch {
-          next[link.id] = 'error';
-        }
-      } catch {
-        next[link.id] = 'error';
-      }
+    const rewrite = autoRewriteExpression(expression, knownFields);
+    if (rewrite && rewrite.rewritten !== rewrite.original) {
+      next[link.id] = 'autofix';
+      continue;
     }
+
+    try {
+      evaluateConditionWithTrace(expression, context);
+      next[link.id] = 'ok';
+    } catch {
+      next[link.id] = 'error';
+    }
+  } catch {
+    next[link.id] = 'error';
+  }
+
+  // Beginner-friendly: missing owner is not an error
+  if (next[link.id] !== 'error' && isDecisionPoint && !link.decisionOwner) {
+    next[link.id] = 'missing_owner';
+  }
+}
+
+
+    
 
     setEdgeStatusByLinkId(next);
   }, [project]);
@@ -1298,7 +1359,15 @@ const App: React.FC = () => {
                         <WorkflowGraph 
                           project={project} 
                           onSelectAgent={setSelectedAgentId}
-                          onEditCondition={(id, c) => setEditingLink({ id, condition: c })}
+                          onEditCondition={(id, c) => {
+                            const link = (project.flow.logic as any[]).find((l) => l.id === id);
+                            setEditingLink({
+                              id,
+                              condition: c,
+                              mapping: link?.mapping ? JSON.stringify(link.mapping, null, 2) : '',
+                              decisionOwner: link?.decisionOwner,
+                            });
+                          }}
                           onNavigateToPrompt={handleNavigateToPrompt}
                           onNavigateToTools={handleNavigateToTools}
                           isLinkingMode={isLinkingMode}
@@ -1356,6 +1425,10 @@ const App: React.FC = () => {
                                 <RuleInspectorPanel
                                     link={selectedLogicLink as any}
                                     onClose={() => setSelectedLogicLinkId(null)}
+                                    onUpdateDecisionOwner={(owner: 'ai' | 'human') => {
+                                      if (!selectedLogicLink?.id) return;
+                                      setDecisionOwnerForLink(selectedLogicLink.id, owner);
+                                    }}
                                     onUpdateCondition={(newCondition: string) => {
                                         const updatedLogic = (project.flow.logic || []).map((l: any) =>
                                             l.id === selectedLogicLink?.id
@@ -1384,6 +1457,11 @@ const App: React.FC = () => {
                               trace={selectedConditionTrace}
                               onClose={() => setSelectedConditionTrace(null)}
                               onApplyRewrite={handleApplyRuleRewrite}
+                              onSetDecisionOwner={(owner) => {
+                                const linkId = (selectedConditionTrace as any)?.conditionId as string | undefined;
+                                if (!linkId) return;
+                                setDecisionOwnerForLink(linkId, owner);
+                              }}
                               hideAutoFix={Boolean(selectedLogicLink)}
                             />
                           </div>
@@ -1408,6 +1486,51 @@ const App: React.FC = () => {
                                         className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none font-mono text-sm"
                                         placeholder="variable == 'value'"
                                     />
+                                </div>
+                                
+                                {/* Beginner-friendly: missing decision owner */}
+                                {editingLink?.condition?.trim() &&
+                                  editingLink.condition.trim().toLowerCase() !== 'always' &&
+                                  !editingLink.decisionOwner && (
+                                    <div className="text-[11px] text-amber-700 -mt-2">
+                                      This decision needs an owner (AI or Human).
+                                    </div>
+                                  )}
+
+                                {/* Minimal decision owner picker (no new screens) */}
+                                <div className="-mt-1">
+                                  <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
+                                    Decision owner
+                                  </label>
+                                  <div className="flex items-center gap-4 text-sm text-slate-700">
+                                    <label className="inline-flex items-center gap-2 cursor-pointer">
+                                      <input
+                                        type="radio"
+                                        name="decisionOwner"
+                                        checked={editingLink.decisionOwner === 'ai'}
+                                        onChange={() =>
+                                          setEditingLink((prev) =>
+                                            prev ? { ...prev, decisionOwner: 'ai' } : prev,
+                                          )
+                                        }
+                                      />
+                                      AI
+                                    </label>
+
+                                    <label className="inline-flex items-center gap-2 cursor-pointer">
+                                      <input
+                                        type="radio"
+                                        name="decisionOwner"
+                                        checked={editingLink.decisionOwner === 'human'}
+                                        onChange={() =>
+                                          setEditingLink((prev) =>
+                                            prev ? { ...prev, decisionOwner: 'human' } : prev,
+                                          )
+                                        }
+                                      />
+                                      Human
+                                    </label>
+                                  </div>
                                 </div>
                                 <div>
                                     <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Data Mapping (JSON)</label>

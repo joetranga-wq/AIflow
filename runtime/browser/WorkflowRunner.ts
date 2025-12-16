@@ -117,9 +117,12 @@ export class WorkflowRunner {
       const nextAgentId = this.evaluateLogic(currentAgentId);
 
       if (nextAgentId) {
-        this.log('info', `Transitioning: ${agent.name} ➔ ${nextAgentId}`);
+        const nextAgent = this.project.agents.find((a) => a.id === nextAgentId);
+        const nextLabel = nextAgent ? `${nextAgent.name} (${nextAgentId})` : nextAgentId;
+        this.log('info', `Routing to next agent: ${nextLabel}`, agent.id);
         currentAgentId = nextAgentId;
       } else {
+        this.log('info', 'No matching rule. Execution will stop.', agent.id);
         this.log('success', 'Workflow execution finished. No further valid transitions.');
         currentAgentId = null;
       }
@@ -190,7 +193,9 @@ export class WorkflowRunner {
         output = this.simulateAgentOutput(agent);
       }
 
-      this.log('success', `Agent completed task.`, agent.id, { output });
+      this.log('success', `Agent completed task.`, agent.id, {
+        outputPreview: typeof output === 'string' ? output.slice(0, 500) : output,
+      });
 
       // Store raw output
       this.context['last_output'] = output;

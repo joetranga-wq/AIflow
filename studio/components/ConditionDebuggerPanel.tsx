@@ -9,6 +9,7 @@ interface ConditionDebuggerPanelProps {
   trace: any;
   onClose?: () => void;
   onApplyRewrite?: (rewrittenExpression: string) => void;
+  onSetDecisionOwner?: (owner: 'ai' | 'human') => void;
   hideAutoFix?: boolean; // 👈 NIEUW: verberg AutoFix blok (bij open Rule Inspector)
 }
 
@@ -84,9 +85,11 @@ const findFieldSuggestion = (
 
 export const ConditionDebuggerPanel: React.FC<
   ConditionDebuggerPanelProps
-> = ({ trace, onClose, onApplyRewrite, hideAutoFix }) => {
+> = ({ trace, onClose, onApplyRewrite, onSetDecisionOwner, hideAutoFix }) => {
 
   if (!trace) return null;
+
+  const isMissingOwner = !!(trace?.missingOwner || trace?.edgeStatus === 'missing_owner');
 
   const expression = trace.expression as string;
   const expressionWithValues = trace.expressionWithValues as string;
@@ -273,6 +276,29 @@ export const ConditionDebuggerPanel: React.FC<
 
       {/* Body */}
       <div className="flex-1 overflow-auto p-4 space-y-4 text-xs text-slate-700">
+        {isMissingOwner && (
+          <div className="border border-amber-200 bg-amber-50 rounded-xl p-3">
+            <div className="text-[11px] text-amber-900">
+              This is a decision point. Choose who owns this decision.
+            </div>
+            <div className="mt-2 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => onSetDecisionOwner?.('ai')}
+                className="text-[11px] font-medium px-2.5 py-1 rounded-full bg-white border border-amber-200 text-amber-900 hover:bg-amber-100"
+              >
+                Set owner: AI
+              </button>
+              <button
+                type="button"
+                onClick={() => onSetDecisionOwner?.('human')}
+                className="text-[11px] font-medium px-2.5 py-1 rounded-full bg-white border border-amber-200 text-amber-900 hover:bg-amber-100"
+              >
+                Set owner: Human
+              </button>
+            </div>
+          </div>
+        )}
         {/* Rule expression */}
         <div>
           <div className="text-[10px] uppercase tracking-[0.16em] text-slate-400 mb-1">

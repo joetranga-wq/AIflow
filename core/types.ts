@@ -1,18 +1,14 @@
-
-
 export enum ViewState {
   DASHBOARD = 'DASHBOARD',
   WORKFLOW = 'WORKFLOW',
   AGENTS = 'AGENTS',
   PROMPTS = 'PROMPTS',
   TOOLS = 'TOOLS',
+  MEMORY = 'MEMORY',
   SETTINGS = 'SETTINGS',
   DOCS = 'DOCS',
-  MEMORY = 'MEMORY',
-  DEBUG = 'DEBUG', // 👈 nieuw
+  DEBUG = 'DEBUG',
 }
-
-// AIFLOW Standard Types
 
 export interface AgentModel {
   provider: string;
@@ -22,16 +18,16 @@ export interface AgentModel {
 }
 
 export interface Agent {
-  id: string; // Internal use, mapped from filename
+  id: string;
   name: string;
-  role: string;
+  role: 'Worker' | 'Tool';
   model: AgentModel;
-  prompt: string; // Path to prompt file
-  instructions: string; // Path to instructions file
+  prompt: string;
+  instructions: string;
   tools: string[];
   memory: string;
   output_format: string;
-  executionStatus?: 'idle' | 'running' | 'completed' | 'error'; // Visual status
+  executionStatus?: 'idle' | 'running' | 'success' | 'error';
 }
 
 export interface FlowLogic {
@@ -40,67 +36,49 @@ export interface FlowLogic {
   to: string;
   condition: string;
   description: string;
-  mapping?: string;
+  mapping?: any;
+
+  // Decision owner for decision points in the UI (optional for backwards compatibility)
+  decisionOwner?: 'ai' | 'human';
 }
 
 export interface FlowVariables {
   [key: string]: string | number | boolean;
 }
 
-export interface FlowJson {
-  schema_version: string;
-  entry_agent: string;
-  agents: string[];
+export interface Flow {
+  // Start node for runtime execution. Optional so new/empty projects can exist in the editor.
+  entry_agent?: string;
+
   variables: FlowVariables;
+  agents: string[];
   logic: FlowLogic[];
-  error_handling: {
-    retry: number;
-    fallback_agent: string;
-  };
 }
 
-export interface ToolSchema {
-  type: string;
-  properties?: Record<string, any>;
-  required?: string[];
-  [key: string]: any;
-}
-
-export interface ToolAuth {
-  type: 'none' | 'api_key' | 'bearer' | 'oauth2';
-  key?: string;
-  token?: string;
-  header_key?: string; // e.g., "X-API-Key"
-  client_id?: string;
-  client_secret?: string;
-  token_endpoint?: string;
-  scope?: string;
+export interface ToolOperation {
+  name: string;
+  method: string;
+  path: string;
+  description?: string;
+  input_schema?: any;
+  output_schema?: any;
 }
 
 export interface ToolDefinition {
   type: 'http' | 'builtin' | 'python';
+  description: string;
+  operations: ToolOperation[];
   endpoint?: string;
-  method?: string;
-  operations?: string[];
-  description?: string;
-  input_schema?: ToolSchema; // JSON Schema
-  output_schema?: ToolSchema;
-  auth?: ToolAuth;
-}
-
-export interface ToolRegistry {
-  [key: string]: ToolDefinition;
 }
 
 export interface AIFlowProject {
   metadata: {
     name: string;
     version: string;
-    description: string;
-    creator: string;
+    description?: string;
   };
-  flow: FlowJson;
   agents: Agent[];
-  tools: ToolRegistry;
-  prompts: { [filename: string]: string }; // filename -> content
+  flow: Flow;
+  tools: Record<string, ToolDefinition>;
+  prompts: Record<string, string>;
 }

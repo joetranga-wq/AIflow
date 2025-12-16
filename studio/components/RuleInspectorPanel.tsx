@@ -5,6 +5,8 @@ interface RuleInspectorPanelProps {
   link: any;
   onClose?: () => void;
   onUpdateCondition?: (newCondition: string) => void;
+  onUpdateDecisionOwner?: (owner: 'ai' | 'human') => void;
+  onDebugRule?: () => void;
   context?: any; // debugContext or agent context
 }
 
@@ -12,6 +14,8 @@ export const RuleInspectorPanel: React.FC<RuleInspectorPanelProps> = ({
   link,
   onClose,
   onUpdateCondition,
+  onUpdateDecisionOwner,
+  onDebugRule,
   context = {},
 }) => {
   const [condition, setCondition] = useState(link?.condition || '');
@@ -67,6 +71,10 @@ export const RuleInspectorPanel: React.FC<RuleInspectorPanelProps> = ({
 
   if (!link) return null;
 
+  const trimmed = (condition ?? '').toString().trim();
+  const isDecisionPoint = trimmed.length > 0 && trimmed !== 'always';
+  const needsOwner = isDecisionPoint && !link?.decisionOwner;
+
   return (
     <div className="bg-white border-l border-slate-200 w-[360px] h-full flex flex-col">
       {/* Header */}
@@ -93,8 +101,19 @@ export const RuleInspectorPanel: React.FC<RuleInspectorPanelProps> = ({
       <div className="flex-1 overflow-auto p-4 space-y-4">
         {/* Rule editor */}
         <div>
-          <div className="text-[10px] uppercase tracking-[0.14em] text-slate-400 mb-1">
-            Condition
+          <div className="flex items-center justify-between">
+            <div className="text-[10px] uppercase tracking-[0.14em] text-slate-400 mb-1">
+              Condition
+            </div>
+            {onDebugRule && (
+              <button
+                type="button"
+                onClick={onDebugRule}
+                className="text-[11px] font-medium text-slate-600 hover:text-slate-800"
+              >
+                Debug
+              </button>
+            )}
           </div>
           <textarea
             value={condition}
@@ -104,6 +123,31 @@ export const RuleInspectorPanel: React.FC<RuleInspectorPanelProps> = ({
             }}
             className="w-full border border-slate-300 rounded-lg px-2 py-1 text-[12px] font-mono text-slate-800 focus:ring-2 focus:ring-indigo-400 outline-none resize-none h-[90px]"
           />
+
+          {/* ✅ Missing owner helper + quick set buttons */}
+          {needsOwner && (
+            <div className="mt-2 border border-amber-200 bg-amber-50 rounded-xl p-3">
+              <div className="text-[11px] text-amber-900">
+                This is a decision point. Choose who owns this decision.
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => onUpdateDecisionOwner?.('ai')}
+                  className="text-[11px] font-medium px-2.5 py-1 rounded-full bg-white border border-amber-200 text-amber-900 hover:bg-amber-100"
+                >
+                  Set owner: AI
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onUpdateDecisionOwner?.('human')}
+                  className="text-[11px] font-medium px-2.5 py-1 rounded-full bg-white border border-amber-200 text-amber-900 hover:bg-amber-100"
+                >
+                  Set owner: Human
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* INLINE AUTOFIX BLOCK */}

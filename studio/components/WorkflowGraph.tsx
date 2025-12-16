@@ -29,7 +29,7 @@ interface WorkflowGraphProps {
   validationByAgentId?: Record<string, { errors: number; warnings: number }>;
 
   // Edge status for badges/colors
-  edgeStatusByLinkId?: Record<string, 'ok' | 'autofix' | 'error'>;
+  edgeStatusByLinkId?: Record<string, 'ok' | 'autofix' | 'error' | 'missing_owner'>;
 }
 
 type MenuState =
@@ -66,16 +66,37 @@ export default function WorkflowGraph({
 
   const [menu, setMenu] = useState<MenuState>({ open: false });
 
-  const EDGE_COLORS: Record<'ok' | 'autofix' | 'error', string> = {
+  const EDGE_COLORS: Record<'ok' | 'autofix' | 'error' | 'missing_owner', string> = {
     ok: '#2563eb', // blue
     autofix: '#f59e0b', // amber
     error: '#ef4444', // red
+    missing_owner: '#6b7280', // slate
   };
 
-  const getEdgeStatus = (linkId: string): 'ok' | 'autofix' | 'error' | undefined => {
+  const getEdgeStatus = (linkId: string): 'ok' | 'autofix' | 'error' | 'missing_owner' | undefined => {
     if (!edgeStatusByLinkId) return undefined;
     return edgeStatusByLinkId[linkId];
   };
+
+  const getBadgeWidth = (status: any): number => {
+    if (!status) return 0;
+    return status === 'missing_owner' ? 92 : 46;
+  };
+
+  const getBadgeLabel = (status: any): string => {
+    if (!status) return '';
+    if (status === 'ok') return 'OK';
+    if (status === 'autofix') return 'FIX';
+    if (status === 'missing_owner') return 'Needs owner';
+    return 'ERR';
+  };
+
+  const getBadgeTitle = (status: any): string => {
+    if (status === 'missing_owner') return 'Decision point: choose AI or Human in Edit Logic Link.';
+    return '';
+  };
+
+
 
   const handleSelectAgent = (agentId: string) => {
     // Prefer App.tsx click handler (linking-mode aware)
@@ -294,11 +315,15 @@ export default function WorkflowGraph({
       .append('g')
       .style('pointer-events', 'none');
 
+    // Tooltip (beginner-friendly)
+    linkBadgeGroup.append('title').text((d: any) => getBadgeTitle(getEdgeStatus(d.id)));
+
+
     linkBadgeGroup
       .append('rect')
       .attr('rx', 8)
       .attr('ry', 8)
-      .attr('width', 46)
+      .attr('width', (d: any) => getBadgeWidth(getEdgeStatus(d.id)))
       .attr('height', 18)
       .attr('y', -9)
       .attr('x', 72)
@@ -310,20 +335,14 @@ export default function WorkflowGraph({
 
     linkBadgeGroup
       .append('text')
-      .attr('x', 95)
+      .attr('x', (d: any) => 72 + getBadgeWidth(getEdgeStatus(d.id)) / 2)
       .attr('y', 0)
       .attr('text-anchor', 'middle')
       .attr('dominant-baseline', 'middle')
       .attr('font-size', 10)
       .attr('font-weight', 700)
       .attr('fill', '#ffffff')
-      .text((d: any) => {
-        const status = getEdgeStatus(d.id);
-        if (!status) return '';
-        if (status === 'ok') return 'OK';
-        if (status === 'autofix') return 'FIX';
-        return 'ERR';
-      })
+      .text((d: any) => getBadgeLabel(getEdgeStatus(d.id)))
       .attr('opacity', (d: any) => (getEdgeStatus(d.id) ? 1 : 0));
 
     // --- Nodes ---
