@@ -1,3 +1,99 @@
+# AIFLOW — Decision Security for Automated Systems
+
+**We make sure automated actions can be stopped — and explained — before damage happens.**
+
+AIFLOW is a **decision security layer** that sits between automated systems (AI agents, rules, ML)
+and execution. It decides **whether automation is allowed** — and explains why.
+
+AIFLOW never executes actions.
+
+---
+
+## How AIFLOW fits
+
+```
+Automated System
+(AI agents, rules, ML)
+        │
+        ▼
+   AIFLOW
+Decision Security Layer
+        │
+   ┌────┴────┐
+   ▼         ▼
+Execute   Hold / Confirm
+```
+
+AIFLOW does not move money, publish content, or trigger side‑effects.  
+It only decides whether automation may proceed.
+
+---
+
+## What AIFLOW is (and is not)
+
+**AIFLOW is:**
+- A decision layer for automated systems
+- Explainable and trace‑first by design
+- Provider‑agnostic (OpenAI, Gemini, others)
+
+**AIFLOW is not:**
+- An automation tool (like n8n or Zapier)
+- A payment processor
+- A fraud engine
+
+Stopping automation is a **valid outcome**, not a failure.
+
+---
+
+## Decision‑as‑Code (.aiflow)
+
+AIFLOW flows are defined as portable `.aiflow` JSON files.
+
+A `.aiflow` file describes:
+- Decision structure and routing
+- Agent roles and responsibilities
+- Expected decision outputs
+- Retry and error semantics
+
+This makes decisions:
+- Versioned
+- Reviewable
+- Auditable
+- Reproducible
+
+The UI is an editor.  
+The `.aiflow` file is the source of truth.
+
+---
+
+## Simulation mode (no API key)
+
+AIFLOW supports deterministic simulation:
+- No API keys required
+- Seeded runs
+- Trace‑first debugging
+
+Simulation lets teams understand decisions **before** connecting real systems.
+
+---
+
+## Security & data handling
+
+AIFLOW:
+- Does not store credentials
+- Does not execute actions
+- Does not own sensitive systems
+
+It evaluates decision context and returns a decision + explanation.
+
+**AIFLOW sits outside the blast radius of core systems.**
+
+---
+
+# Developer Documentation
+
+---
+
 # AIFLOW Studio
 
 ![CI Status](https://github.com/AIFlow-studio/AIflow/actions/workflows/ci.yml/badge.svg)
@@ -5,27 +101,27 @@
 
 **Visual AI Agent Workflows — Design · Run · Debug**
 
-AIFLOW is a visual + code-native framework for building multi‑agent AI workflows.
+AIFLOW is a visual + code‑native framework for building multi‑agent AI workflows.
 
-- 🧠 **Workflow Builder** – design your agents and routing logic as a graph  
-- ✍️ **File‑based Prompts** – prompts live as files in your repo and are linked to agents  
-- 🧰 **Tools Registry & Runtime** – define tools once, reuse them across agents  
+- 🧠 **Workflow Builder** – design agents and routing logic as a graph  
+- ✍️ **File‑based Prompts** – prompts live as files in your repo  
+- 🧰 **Tools Registry & Runtime** – define tools once, reuse them  
 - 💻 **CLI Runtime** – execute `.aiflow` projects locally or in CI  
-- 🐛 **Debug Trace Viewer** – inspect each step of a CLI run with full execution context  
-- ✨ **Graph Highlighting** – jump from a CLI trace into the visual workflow path
+- 🐛 **Debug Trace Viewer** – inspect each step with full context  
+- ✨ **Graph Highlighting** – jump from CLI trace to visual path  
 
-AIFLOW is built for developers who want **clear, debuggable multi‑agent systems** without hiding anything behind SaaS black boxes.
+AIFLOW is built for developers who want **clear, debuggable multi‑agent systems**
+without hiding behavior behind SaaS black boxes.
 
 ---
 
 ## 🌟 Current Stable Version
 
-**AIFLOW Standard:** v0.1 — *Open Standard Preview*  
+**AIFLOW Standard:** v0.1 — Open Standard Preview  
 **Runtime & Studio:** v0.1.x  
-**Next Version:** v0.2 — currently in active development on `main`  
+**Next Version:** v0.2 — active development on `main`
 
-For upcoming features (Condition Engine v0.2, Validator v0.2, Tools & Memory), see the  
-➡️ **Roadmap section in [`AIFLOW.md`](./AIFLOW.md)**
+See the roadmap in [`AIFLOW.md`](./AIFLOW.md).
 
 ---
 
@@ -33,169 +129,63 @@ For upcoming features (Condition Engine v0.2, Validator v0.2, Tools & Memory), s
 
 - 🧩 **Standard & Master Document:** [`AIFLOW.md`](./AIFLOW.md)  
 - 📘 **Spec folder:** [`./spec`](./spec)  
-- 🌐 **Docs & Website:** https://aiflow-studio.github.io/AIflow/  
-
----
-
-## ✨ What’s in this repo?
-
-This repository contains:
-
-- The **AIFLOW Standard v0.1** spec (`./AIFLOW.md` and `./spec/aiflow-v0.1.md`)
-- **AIFLOW Studio** (the web UI)
-- The **CLI runtime** for running `.aiflow` projects
-- The early **condition engine**, **validator**, and **tools runtime**
-- Example projects under `./examples`
-
-Everything is designed to be **git‑friendly**: flows, agents, prompts, tools and rules all live as files.
+- 🌐 **Docs & Website:** https://aiflow-studio.github.io/AIflow-site/
 
 ---
 
 ## 🚀 Getting Started
 
-### 1. Clone the repo
-
 ```bash
 git clone https://github.com/AIFlow-studio/AIflow.git
 cd AIflow
-```
-
-### 2. Install dependencies
-
-```bash
 npm install
-```
-
-### 3. Run AIFLOW Studio (web UI)
-
-```bash
 npm run dev
 ```
 
-Then open the URL shown in your terminal (usually `http://localhost:3000`).  
-From here you can:
-
-- Edit workflows visually in the **Workflow Builder**
-- Configure **agents**, **prompts**, and **tools**
-- Open the **Debug – CLI Trace Viewer**
+Open `http://localhost:3000` to launch AIFLOW Studio.
 
 ---
 
 ## 🧪 Running an example flow via CLI
 
-This repo ships with a fully‑worked example: **CustomerSupportFlow**.
-
-From the project root:
-
 ```bash
 npm run run-flow -- ./examples/CustomerSupportFlow/CustomerSupportFlow_v1.0.0.aiflow
 ```
 
-You’ll see:
-
-- Each agent step (e.g. `TriageBot`, `ResponderBot`)
-- Raw model output
-- Parsed output
-- Selected routing rule and next agent
-
-At the end, the CLI prints the **Final context JSON** with a `__trace` field.
-
-Copy that JSON, then:
-
-1. Open **Debug → CLI Trace Viewer** in AIFLOW Studio  
-2. Paste the final context JSON  
-3. Click **Parse trace** to inspect each step  
-4. Use **Highlight full path in Workflow** to light up the executed path in the graph
+Paste the final JSON output into **Debug → CLI Trace Viewer**
+and use **Highlight full path in Workflow** to visualize the executed route.
 
 ---
 
-## 🧠 Key Components
+## 📁 Project Structure
 
-### Condition Engine (early v0.1)
-
-An early expression engine for routing logic:
-
-- Supports simple rule evaluation on context fields  
-- Used to decide which edge/agent to follow next in a flow  
-- A richer expression engine (nested keys, `contains()`, comparison operators) is being developed for v0.2  
-
-See `runtime/core` for the current implementation and tests.
-
-### Flow Validator (early v0.1)
-
-The validator is the component that checks whether a `.aiflow` project is structurally sound.
-
-- Performs basic structural checks on flows and agents  
-- Integrates with the CLI and Studio to give early feedback on broken flows  
-- A more complete validator (including advanced condition and tools validation) is planned for v0.2+
-
-### Tools Runtime
-
-- Central registry for tools defined in TypeScript  
-- Runs tools for a given agent step during a flow  
-- Makes tool input/output available in the agent context and trace  
-
-Tools become a first‑class part of the standard in upcoming versions.
-
----
-
-## 🐛 Debugging & Traces
-
-The **Debug – CLI Trace Viewer** is designed to make multi‑agent behaviour understandable:
-
-- See **Input Context**, **Parsed Output**, and **Evaluated Rules** per step  
-- Clearly marked **selected rule** and **next agent**  
-- Step badges (`STEP 0`, `STEP 1`, …) plus visual highlighting in the graph  
-- Full‑path highlighting across the workflow
-
-Instead of guessing why a route was taken, you can see exactly which condition fired.
-
----
-
-## 📁 Project Structure (high‑level)
-
-```text
-core/              # Core runtime & spec helpers
-runtime/           # CLI runtime, condition engine, validator, tools runtime
-spec/              # AIFLOW Standard v0.x spec
-studio/            # React app (AIFLOW Studio UI)
-examples/          # Example flows, including CustomerSupportFlow
-docs/screenshots/  # UI screenshots & marketing assets
 ```
-
----
-
-## 🛠 Tech Stack
-
-- **TypeScript / Node.js** – runtime & tooling  
-- **React** – Studio UI  
-- **Vitest** – tests for core logic and CLI  
-- **GitHub Actions** – CI for build and tests
+core/              # Core runtime & helpers
+runtime/           # CLI runtime, condition engine, validator
+spec/              # AIFLOW Standard v0.x
+studio/            # React app (Studio UI)
+examples/          # Example flows
+docs/screenshots/  # UI screenshots
+```
 
 ---
 
 ## 🤝 Contributing
 
-Contributions are very welcome.
-
-- Found a bug or have an idea? → open an **Issue**  
-- Want to add an example flow or tool? → open a **Pull Request**  
-
+Issues and pull requests are welcome.
 A `CONTRIBUTING.md` will be added as the project matures.
 
 ---
 
 ## 📜 License
 
-AIFLOW is released under the **MIT License**. See [`LICENSE`](./LICENSE) for details.
+MIT License — see [`LICENSE`](./LICENSE).
 
 ---
 
-## 💬 Questions / Feedback
+## 💬 Contact
 
-For now, the easiest way to reach the project is via:
+- X (Twitter): [@aiflowbuild](https://x.com/aiflowbuild)
+- GitHub Issues
 
-- X (Twitter): **[@aiflowbuild](https://x.com/aiflowbuild)**  
-- GitHub Issues on this repo
-
-If you’re building something cool on top of AIFLOW, we’d love to see it. 🚀
+If you’re building something on top of AIFLOW, we’d love to see it.
