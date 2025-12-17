@@ -17,10 +17,21 @@ export interface AgentModel {
   max_tokens: number;
 }
 
+// ✅ Expanded roles to match existing templates in core/constants.ts
+export type AgentRole =
+  | 'Worker'
+  | 'Tool'
+  | 'Classifier'
+  | 'Engineer'
+  | 'Copywriter'
+  | 'Planner'
+  | 'Writer'
+  | 'Marketer';
+
 export interface Agent {
   id: string;
   name: string;
-  role: 'Worker' | 'Tool';
+  role: AgentRole;
   model: AgentModel;
   prompt: string;
   instructions: string;
@@ -46,13 +57,23 @@ export interface FlowVariables {
   [key: string]: string | number | boolean;
 }
 
+// ✅ Updated Flow to match .aiflow exports + templates in constants.ts
 export interface Flow {
-  // Start node for runtime execution. Optional so new/empty projects can exist in the editor.
+  // Optional so new/empty projects can exist in the editor.
   entry_agent?: string;
+
+  // Optional schema version used in .aiflow files / templates
+  schema_version?: string;
 
   variables: FlowVariables;
   agents: string[];
   logic: FlowLogic[];
+
+  // Optional error handling (present in constants.ts + exports)
+  error_handling?: {
+    retry?: number;
+    fallback_agent?: string;
+  };
 }
 
 export interface ToolOperation {
@@ -64,11 +85,20 @@ export interface ToolOperation {
   output_schema?: any;
 }
 
+// ✅ Updated ToolDefinition to support both “rich” and “simple/legacy” templates
 export interface ToolDefinition {
   type: 'http' | 'builtin' | 'python';
   description: string;
-  operations: ToolOperation[];
+
+  // Some templates define a single method at the tool root (legacy)
+  method?: string;
+
+  // Either rich ops or simple string ops (legacy)
+  operations?: ToolOperation[] | string[];
+
   endpoint?: string;
+  input_schema?: any;
+  output_schema?: any;
 }
 
 export interface AIFlowProject {
@@ -76,6 +106,7 @@ export interface AIFlowProject {
     name: string;
     version: string;
     description?: string;
+    creator?: string;
   };
   agents: Agent[];
   flow: Flow;

@@ -16,7 +16,10 @@ import { autoRewriteExpression } from './runtime/autoRewriteExpression';
 import { validateProject, hasValidationErrors, ValidationIssue } from '../runtime/core/validator';
 import { WorkflowRunner, LogEntry } from '../runtime/browser/WorkflowRunner';
 import { ViewState, AIFlowProject, Agent, ToolDefinition } from '../core/types';
-import { INITIAL_PROJECT, MARKETING_PROJECT, TOOL_TEMPLATES } from '../core/constants';
+import { INITIAL_PROJECT, MARKETING_PROJECT, TOOL_TEMPLATES, DEFAULT_PROJECT_TEMPLATE } from '../core/constants';
+
+
+
 
 import { 
   Play, Save, Plus, Wrench, Undo, Redo, Box, Database, Zap, 
@@ -671,29 +674,34 @@ const [activeSessionId, setActiveSessionId] = useState<string>(
       setCurrentView(ViewState.DASHBOARD);
   };
 
-  const handleCreateProject = () => {
-      const name = `NewProject_${Date.now()}`;
-      const newProject: AIFlowProject = {
-          ...INITIAL_PROJECT,
-          metadata: { ...INITIAL_PROJECT.metadata, name: "Untitled Project", version: "0.1.0" },
-          agents: [],
-          flow: { ...INITIAL_PROJECT.flow, agents: [], logic: [] },
-          tools: {}
-      };
-      
-      const newSession: ProjectSession = {
-          id: getStableSessionId(name),
-          history: [newProject],
-          historyIndex: 0,
-          lastModified: new Date()
-      };
+const handleCreateProject = () => {
+  const name = `NewProject_${Date.now()}`;
 
-      setSessions(prev => [...prev, newSession]);
-      setActiveSessionId(newSession.id);
+  // ✅ New Project starts from the default demo template
+  const project: AIFlowProject = JSON.parse(JSON.stringify(DEFAULT_PROJECT_TEMPLATE));
 
-      setIsDirty(false);
-      setCurrentView(ViewState.WORKFLOW);
+  // Optional: keep a stable "Untitled Project" label
+  project.metadata = {
+    ...project.metadata,
+    name: "Untitled Project",
+    version: "0.1.0",
   };
+
+  const newSession: ProjectSession = {
+    id: getStableSessionId(name),
+    history: [project],
+    historyIndex: 0,
+    lastModified: new Date(),
+  };
+
+  setSessions(prev => [...prev, newSession]);
+  setActiveSessionId(newSession.id);
+
+  setIsDirty(false);
+  setCurrentView(ViewState.WORKFLOW);
+  setSelectedAgentId(null);
+};
+
 
   // ✅ Open template modal (Dashboard → New from template)
   const handleOpenTemplateModal = () => {

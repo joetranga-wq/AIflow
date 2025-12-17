@@ -1,4 +1,3 @@
-
 import { AIFlowProject } from './types';
 
 export const INITIAL_PROJECT: AIFlowProject = {
@@ -60,7 +59,7 @@ export const INITIAL_PROJECT: AIFlowProject = {
       tools: [],
       memory: "memory/schema.json",
       output_format: "json",
-      executionStatus: 'idle'
+      executionStatus: "idle"
     },
     {
       id: "agent2",
@@ -77,7 +76,7 @@ export const INITIAL_PROJECT: AIFlowProject = {
       tools: ["web_search", "stack_overflow_api"],
       memory: "memory/vector.json",
       output_format: "json",
-      executionStatus: 'idle'
+      executionStatus: "idle"
     },
     {
       id: "agent3",
@@ -94,7 +93,7 @@ export const INITIAL_PROJECT: AIFlowProject = {
       tools: [],
       memory: "memory/schema.json",
       output_format: "text",
-      executionStatus: 'idle'
+      executionStatus: "idle"
     }
   ],
   tools: {
@@ -237,9 +236,119 @@ export const TOOL_TEMPLATES: Record<string, any> = {
     operations: ["add", "subtract", "multiply", "divide"]
   },
   "database_query": {
-      type: "http",
-      description: "Execute SQL query",
-      endpoint: "https://db.internal/query",
-      method: "POST"
+    type: "http",
+    description: "Execute SQL query",
+    endpoint: "https://db.internal/query",
+    method: "POST"
+  }
+};
+
+// ===============================
+// Default template (used for "New Project")  ✅ TEMPLATE B
+// ===============================
+export const DEFAULT_PROJECT_TEMPLATE: AIFlowProject = {
+  metadata: {
+    name: "Untitled Project",
+    version: "0.1.0",
+    description: "First 5 minutes with AIFlow (demo template)",
+    creator: "Marcel Spaan"
+  },
+
+  flow: {
+    schema_version: "1.0",
+    entry_agent: "agent_1",
+    agents: ["agent_1", "agent_2", "agent_3", "agent_4"],
+    variables: {
+      language: "nl",
+      timezone: "Europe/Amsterdam"
+    },
+    logic: [
+      {
+        id: "link_1",
+        from: "agent_1",
+        to: "agent_2",
+        condition: "language == \"nl\"",
+        description: "Agent1 -> Agent2",
+        decisionOwner: "ai"
+      },
+      {
+        id: "link_2",
+        from: "agent_2",
+        to: "agent_3",
+        condition: "language == \"nl\"",
+        description: "Agent2 -> Agent3",
+        decisionOwner: "ai"
+      },
+      {
+        id: "link_3",
+        from: "agent_3",
+        to: "agent_4",
+        condition: "language == \"nl\"",
+        description: "Agent3 -> Draft",
+        decisionOwner: "ai"
+      }
+    ],
+    error_handling: {
+      retry: 2,
+      fallback_agent: "agent_4"
+    }
+  },
+
+  agents: [
+    {
+      id: "agent_1",
+      name: "New Agent1",
+      role: "Worker",
+      model: { provider: "openai", name: "gpt-4-turbo", temperature: 0.7, max_tokens: 1000 },
+      prompt: "new_prompt.txt",
+      instructions: "instructions.md",
+      tools: [],
+      memory: "memory/schema.json",
+      output_format: "json",
+      executionStatus: "idle"
+    },
+    {
+      id: "agent_2",
+      name: "New Agent2",
+      role: "Worker",
+      model: { provider: "openai", name: "gpt-4-turbo", temperature: 0.7, max_tokens: 1000 },
+      prompt: "new_prompt.txt",
+      instructions: "instructions.md",
+      tools: [],
+      memory: "memory/schema.json",
+      output_format: "json",
+      executionStatus: "idle"
+    },
+    {
+      id: "agent_3",
+      name: "New Agent3",
+      role: "Worker",
+      model: { provider: "openai", name: "gpt-4-turbo", temperature: 0.7, max_tokens: 1000 },
+      prompt: "new_prompt.txt",
+      instructions: "instructions.md",
+      tools: [],
+      memory: "memory/schema.json",
+      output_format: "json",
+      executionStatus: "idle"
+    },
+    {
+      id: "agent_4",
+      name: "Draft answer",
+      role: "Worker",
+      model: { provider: "openai", name: "gpt-4-turbo", temperature: 0.7, max_tokens: 1000 },
+      prompt: "new_prompt.txt",
+      instructions: "instructions.md",
+      tools: [],
+      memory: "memory/schema.json",
+      output_format: "json",
+      executionStatus: "idle"
+    }
+  ],
+
+  tools: {},
+
+  // ✅ Prevent AGENT_UNKNOWN_PROMPT("new_prompt.txt")
+  prompts: {
+    "new_prompt.txt": "You are a helpful AI agent. Output JSON."
   }
 };
